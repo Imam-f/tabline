@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Check, ChevronDown,
   ChevronLeft, ChevronRight, CircleHelp, Clock3, ExternalLink, FolderClock, FolderOpen,
-  GitBranch, Globe2, Image, Layers3, LayoutList, Maximize2, Monitor, MoreHorizontal, MousePointer2,
+  GitBranch, Globe2, Image, Layers3, LayoutList, Maximize2, Monitor,
   Plus, Radio, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Square, X, Minus,
 } from 'lucide-react';
 import type { AppState, BrowserChoice, BrowserTab, Session, SessionSummary } from './types';
@@ -111,25 +111,22 @@ export default function App() {
   return <div className="app-shell">
     <aside className="sidebar">
       <a className="brand" href="#" onClick={(event) => { event.preventDefault(); setPage('workspace'); }} aria-label="Tabline home"><span className="brand-mark"><span/><span/><span/></span><span>tabline<span className="brand-dot">.</span></span></a>
-      <div className="workspace-switch"><span className="workspace-avatar">P</span><div><strong>Personal workspace</strong><span>Just you and your curiosity</span></div><ChevronDown size={14}/></div>
       <div className="nav-heading">WORKSPACE</div>
       <nav>
         <button className={`nav-item ${page === 'workspace' ? 'active' : ''}`} onClick={() => setPage('workspace')}><Activity size={18}/><span>Browser timeline</span><span className="nav-live-dot"/></button>
-        <button className={`nav-item ${page === 'sessions' ? 'active' : ''}`} onClick={openSessions}><FolderClock size={18}/><span>Saved sessions</span><span className="nav-shortcut">↗</span></button>
+        <button className={`nav-item ${page === 'sessions' ? 'active' : ''}`} onClick={openSessions}><FolderClock size={18}/><span>Saved sessions</span></button>
       </nav>
-      <div className="sidebar-session-heading"><span>CURRENT SESSION</span><MoreHorizontal size={17}/></div>
-      {session ? <button className="current-session" onClick={() => setPage('workspace')}><span className={`tiny-dot ${isLive || demo ? 'green' : 'gray'}`}/><div><strong>{session.name}</strong><span>{demo ? 'Demo session' : isLive ? 'Recording your journey' : 'Saved locally'} · {session.tabs.length} tabs</span></div></button> : <div className="no-sidebar-session">Your next rabbit hole<br/>starts here.</div>}
+      <div className="sidebar-session-heading"><span>CURRENT SESSION</span></div>
+      {session && <button className="current-session" onClick={() => setPage('workspace')}><span className={`tiny-dot ${isLive || demo ? 'green' : 'gray'}`}/><div><strong>{session.name}</strong><span>{demo ? 'Demo session' : isLive ? 'Recording your journey' : 'Saved locally'} · {session.tabs.length} tabs</span></div></button>}
       <div className="sidebar-bottom">
-        <div className="local-card"><span className="local-card-icon"><ShieldCheck size={19}/></span><strong>Your tabs. Your business.</strong><p>Everything stays on your device.<br/>No accounts. No cloud. Just local.</p><span>PRIVATE BY DESIGN <span>↗</span></span></div>
         <button className="nav-item help-button" onClick={() => setShowHelp(true)}><CircleHelp size={18}/><span>A little help</span><span className="help-key">?</span></button>
-        <div className="sidebar-footer"><span className="avatar">Y</span><span>Your local space<small>Made for the curious</small></span><span className="version">v1.0</span></div>
       </div>
     </aside>
 
     <div className="main-shell">
-      <header className="topbar"><div className="breadcrumb"><span>Workspace</span><ChevronRight size={14}/><strong>{page === 'sessions' ? 'Saved sessions' : 'Browser timeline'}</strong></div><div className="topbar-right"><span className="local-label"><span className="tiny-dot green"/>Local-first, always</span><span className="topbar-divider"/><button className="icon-button" onClick={() => setShowHelp(true)} aria-label="Help"><CircleHelp size={18}/></button><span className="top-avatar">Y</span></div></header>
+      <header className="topbar"><div className="breadcrumb"><span>Workspace</span><ChevronRight size={14}/><strong>{page === 'sessions' ? 'Saved sessions' : 'Browser timeline'}</strong></div><div className="topbar-right"><button className="icon-button" onClick={() => setShowHelp(true)} aria-label="Help"><CircleHelp size={18}/></button></div></header>
       <main>
-        <section className="page-heading"><div><div className="eyebrow">A LITTLE CLARITY FOR YOUR CURIOSITY</div><h1>{page === 'sessions' ? 'Pick up the thread.' : 'Your browsing, connected.'}<span className="heading-spark">✳</span></h1><p>{page === 'sessions' ? 'Every rabbit hole, saved on your device. Come back whenever you like.' : 'Every tab has a story. See where it started, and where it takes you.'}</p></div><button className="button primary" onClick={() => setShowLaunch(true)} disabled={state.status === 'launching' || state.status === 'stopping'}><Plus size={17}/>New session</button></section>
+        <section className="page-heading"><div><h1>{page === 'sessions' ? 'Pick up the thread.' : 'Your browsing, connected.'}</h1></div><button className="button primary" onClick={() => setShowLaunch(true)} disabled={state.status === 'launching' || state.status === 'stopping'}><Plus size={17}/>New session</button></section>
 
         {page === 'sessions' ? <section className="sessions-panel">
           <div className="section-heading"><h2>Saved sessions</h2><span>{sessions.length} sessions</span></div>
@@ -154,10 +151,7 @@ export default function App() {
             </div>
             <div className="connection-bar"><div><span className={`tiny-dot ${isLive ? 'green' : demo ? 'orange' : 'gray'}`}/>{demo ? <><strong>You’re exploring a demo</strong><span>·</span><span>Launch a browser to make this timeline yours.</span></> : isLive ? <><strong>Connected to {session?.browser === 'helium' ? 'Helium' : 'Chrome'}</strong><span>·</span><span>127.0.0.1:{state.debugPort}</span></> : <><strong>{archived || session?.endedAt ? 'Session saved locally' : 'Ready to connect'}</strong><span>·</span><span>{archived || session?.endedAt ? 'Your trail is right where you left it.' : 'Helium or Chrome. Your choice.'}</span></>}</div>{demo ? <button onClick={() => setShowLaunch(true)}>Connect your browser <ArrowRight size={13}/></button> : <span className="connection-note"><ShieldCheck size={13}/>{isLive ? 'Recording locally' : 'Only on your device'}</span>}</div>
           </section>
-          <div className="below-panel"><span><MousePointer2 size={14}/>Click a tab to see the details. Follow the arrows to see the story.</span><span>Less tab chaos. More <span className="serif-word">aha.</span><Sparkles size={14}/></span></div>
-          <section className="insight-card"><div className="insight-icon"><GitBranch size={21}/></div><div><strong>Every rabbit hole has a beginning.</strong><p>Those little arrows connect each tab to the one that opened it. A map of how your ideas unfold.</p></div><button onClick={() => setShowHelp(true)}>How it works <ArrowUpRight size={15}/></button><div className="insight-art"><span/><i/><span/><i/><span/></div></section>
         </>}
-        <footer className="page-footer"><span>TABLINE <span>—</span> A little perspective on your browsing.</span><span>Built for wandering minds <span>✳</span></span></footer>
       </main>
     </div>
     {showLaunch && <LaunchDialog onClose={() => setShowLaunch(false)} running={state.status === 'live' || state.status === 'launching' || state.status === 'stopping'} onDemo={exploreDemo} onLaunch={async (options) => { if (!api) return; await api.launch(options); setDemo(null); setArchived(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); setShowLaunch(false); }}/>} 
