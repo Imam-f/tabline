@@ -1,0 +1,259 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Check, ChevronDown,
+  ChevronLeft, ChevronRight, CircleHelp, Clock3, ExternalLink, FolderClock, FolderOpen,
+  GitBranch, Globe2, Image, Layers3, LayoutList, Maximize2, Monitor, MoreHorizontal, MousePointer2,
+  Plus, Radio, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Square, X, Minus,
+} from 'lucide-react';
+import type { AppState, BrowserChoice, BrowserTab, Session, SessionSummary } from './types';
+import { makeDemo } from './demo';
+
+const api = window.tabline;
+const clock = (time: number) => new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+const date = (time: number) => new Date(time).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+const duration = (ms: number) => { const seconds = Math.max(0, Math.floor(ms / 1000)); return seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s` : `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`; };
+function domain(url: string) { try { return new URL(url).hostname.replace(/^www\./, '') || 'New tab'; } catch { return 'New tab'; } }
+function siteName(tab: BrowserTab) { return domain(tab.url).split('.')[0]; }
+function siteColor(tab: BrowserTab) {
+  const host = domain(tab.url);
+  if (host.includes('react')) return 'cyan';
+  if (host.includes('github')) return 'purple';
+  if (host.includes('figma')) return 'pink';
+  if (host.includes('linear')) return 'violet';
+  if (host.includes('vercel')) return 'slate';
+  return 'blue';
+}
+function SiteIcon({ tab, size = '' }: { tab: BrowserTab; size?: string }) {
+  const host = domain(tab.url);
+  return <span className={`site-icon ${siteColor(tab)} ${size}`}>
+    {host.includes('react') ? <span className="react-symbol">⚛</span> : host.includes('github') ? <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.18-3.37-1.18-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.9 1.53 2.34 1.09 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.03-2.68-.1-.26-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.03A9.6 9.6 0 0 1 12 7c.85 0 1.71.11 2.51.34 1.91-1.3 2.75-1.03 2.75-1.03.55 1.38.2 2.39.1 2.65.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.94.36.31.68.92.68 1.85v2.58c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"/></svg> : host.includes('vercel') ? <span>▲</span> : host.includes('linear') ? <span className="linear-symbol">◒</span> : host.includes('figma') ? <span className="figma-symbol">F</span> : host.includes('google') ? <span className="google-symbol">G</span> : <Globe2 size={16} />}
+  </span>;
+}
+
+export default function App() {
+  const [state, setState] = useState<AppState>({ status: 'idle', session: null, debugPort: null, error: null });
+  const [demo, setDemo] = useState<Session | null>(() => api ? null : makeDemo());
+  const [archived, setArchived] = useState<Session | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(api ? null : 'react');
+  const [view, setView] = useState<'timeline' | 'list'>('timeline');
+  const [page, setPage] = useState<'workspace' | 'sessions'>('workspace');
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [showLaunch, setShowLaunch] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [showStop, setShowStop] = useState(false);
+  const [showThumbnails, setShowThumbnails] = useState(true);
+  const [showConnections, setShowConnections] = useState(true);
+  const [zoom, setZoom] = useState(1);
+  const [now, setNow] = useState(Date.now());
+  const [toast, setToast] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const session = demo || archived || state.session;
+  const isLive = !demo && !archived && state.status === 'live';
+  const sessionNow = session?.endedAt || now;
+  const selected = session?.tabs.find((tab) => tab.id === selectedId) || null;
+  const openTabs = session?.tabs.filter((tab) => !tab.closedAt).length || 0;
+  const connections = session?.tabs.filter((tab) => tab.openerId && session.tabs.some((parent) => parent.id === tab.openerId)).length || 0;
+  const filtered = useMemo(() => session?.tabs.filter((tab) => {
+    const matchesQuery = `${tab.title} ${tab.url}`.toLowerCase().includes(query.toLowerCase());
+    return matchesQuery && (filter === 'all' || (filter === 'open' && !tab.closedAt) || (filter === 'closed' && !!tab.closedAt) || (filter === 'linked' && !!tab.openerId));
+  }) || [], [session, query, filter]);
+
+  useEffect(() => {
+    if (!api) return;
+    api.getState().then(setState).catch((error) => setToast(error.message));
+    return api.onState(setState);
+  }, []);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
+  useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(null), 5000); return () => clearTimeout(timer); }, [toast]);
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'k') { event.preventDefault(); searchRef.current?.focus(); }
+      if (event.key === 'Escape') { setShowLaunch(false); setShowHelp(false); setShowStop(false); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+  useEffect(() => { if (state.error) setToast(state.error); }, [state.error]);
+
+  async function action(operation: () => Promise<unknown>, success?: string) {
+    try { await operation(); if (success) setToast(success); } catch (error) { setToast(error instanceof Error ? error.message : 'Something went wrong. Please try again.'); }
+  }
+  async function exportSession() {
+    if (!session) return;
+    if (api) { await action(async () => { if (await api.exportSession(session)) setToast('Session exported with thumbnails and tab connections.'); }); return; }
+    const url = URL.createObjectURL(new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' }));
+    const link = document.createElement('a'); link.href = url; link.download = 'tabline-demo.json'; link.click(); URL.revokeObjectURL(url);
+    setToast('Demo session exported.');
+  }
+  async function openSessions() {
+    setPage('sessions');
+    if (api) await action(async () => setSessions(await api.listSessions()));
+  }
+  function exploreDemo() { setDemo(makeDemo()); setArchived(null); setSelectedId('react'); setPage('workspace'); setShowLaunch(false); setQuery(''); setFilter('all'); }
+
+  return <div className="app-shell">
+    <aside className="sidebar">
+      <a className="brand" href="#" onClick={(event) => { event.preventDefault(); setPage('workspace'); }} aria-label="Tabline home"><span className="brand-mark"><span/><span/><span/></span><span>tabline<span className="brand-dot">.</span></span></a>
+      <div className="workspace-switch"><span className="workspace-avatar">P</span><div><strong>Personal workspace</strong><span>Just you and your curiosity</span></div><ChevronDown size={14}/></div>
+      <div className="nav-heading">WORKSPACE</div>
+      <nav>
+        <button className={`nav-item ${page === 'workspace' ? 'active' : ''}`} onClick={() => setPage('workspace')}><Activity size={18}/><span>Browser timeline</span><span className="nav-live-dot"/></button>
+        <button className={`nav-item ${page === 'sessions' ? 'active' : ''}`} onClick={openSessions}><FolderClock size={18}/><span>Saved sessions</span><span className="nav-shortcut">↗</span></button>
+      </nav>
+      <div className="sidebar-session-heading"><span>CURRENT SESSION</span><MoreHorizontal size={17}/></div>
+      {session ? <button className="current-session" onClick={() => setPage('workspace')}><span className={`tiny-dot ${isLive || demo ? 'green' : 'gray'}`}/><div><strong>{session.name}</strong><span>{demo ? 'Demo session' : isLive ? 'Recording your journey' : 'Saved locally'} · {session.tabs.length} tabs</span></div></button> : <div className="no-sidebar-session">Your next rabbit hole<br/>starts here.</div>}
+      <div className="sidebar-bottom">
+        <div className="local-card"><span className="local-card-icon"><ShieldCheck size={19}/></span><strong>Your tabs. Your business.</strong><p>Everything stays on your device.<br/>No accounts. No cloud. Just local.</p><span>PRIVATE BY DESIGN <span>↗</span></span></div>
+        <button className="nav-item help-button" onClick={() => setShowHelp(true)}><CircleHelp size={18}/><span>A little help</span><span className="help-key">?</span></button>
+        <div className="sidebar-footer"><span className="avatar">Y</span><span>Your local space<small>Made for the curious</small></span><span className="version">v1.0</span></div>
+      </div>
+    </aside>
+
+    <div className="main-shell">
+      <header className="topbar"><div className="breadcrumb"><span>Workspace</span><ChevronRight size={14}/><strong>{page === 'sessions' ? 'Saved sessions' : 'Browser timeline'}</strong></div><div className="topbar-right"><span className="local-label"><span className="tiny-dot green"/>Local-first, always</span><span className="topbar-divider"/><button className="icon-button" onClick={() => setShowHelp(true)} aria-label="Help"><CircleHelp size={18}/></button><span className="top-avatar">Y</span></div></header>
+      <main>
+        <section className="page-heading"><div><div className="eyebrow">A LITTLE CLARITY FOR YOUR CURIOSITY</div><h1>{page === 'sessions' ? 'Pick up the thread.' : 'Your browsing, connected.'}<span className="heading-spark">✳</span></h1><p>{page === 'sessions' ? 'Every rabbit hole, saved on your device. Come back whenever you like.' : 'Every tab has a story. See where it started, and where it takes you.'}</p></div><button className="button primary" onClick={() => setShowLaunch(true)} disabled={state.status === 'launching' || state.status === 'stopping'}><Plus size={17}/>New session</button></section>
+
+        {page === 'sessions' ? <section className="sessions-panel">
+          <div className="section-heading"><h2>Saved sessions</h2><span>{sessions.length} sessions</span></div>
+          {sessions.length ? sessions.map((item) => <button className="saved-session" key={item.id} onClick={() => action(async () => { setArchived(await api!.loadSession(item.id)); setDemo(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); })}><span className="saved-session-icon"><FolderClock size={22}/></span><div><strong>{item.name}</strong><span>{date(item.startedAt)} · {clock(item.startedAt)} · {item.browser === 'helium' ? 'Helium' : 'Chrome'}</span></div><span>{item.tabCount} tabs</span><ArrowRight size={18}/></button>) : <div className="empty-state"><FolderClock size={35}/><h3>A fresh start.</h3><p>Your browsing sessions are saved automatically as you explore.<br/>Launch a browser to start your first one.</p><button className="button primary" onClick={() => setShowLaunch(true)}><Plus size={16}/>Start a session</button></div>}
+        </section> : <>
+          <div className="stats-grid">
+            <Stat icon={<Layers3 size={18}/>} label="Total tabs" value={session?.tabs.length || 0} detail="a trail of curiosity" color="purple"/>
+            <Stat icon={<Monitor size={18}/>} label="Open right now" value={openTabs} detail={<><span className={`tiny-dot ${openTabs ? 'green' : 'gray'}`}/>{openTabs ? 'still exploring' : 'ready when you are'}</>} color="green"/>
+            <Stat icon={<GitBranch size={18}/>} label="Tab connections" value={connections} detail="one thing led to another" color="orange"/>
+            <Stat icon={<Clock3 size={18}/>} label="Session time" value={session ? duration(sessionNow - session.startedAt) : '0m 00s'} detail={session ? `started at ${clock(session.startedAt)}` : 'make time for discovery'} color="blue"/>
+          </div>
+
+          <section className="timeline-panel">
+            <div className="session-bar"><div className="session-title"><span className={`session-symbol ${demo ? 'demo' : ''}`}>{demo ? <Sparkles size={17}/> : <Radio size={17}/>}</span><h2>{session?.name || 'Your next discovery starts here'}</h2>{demo ? <span className="badge demo-badge">DEMO</span> : isLive ? <span className="badge live-badge"><span className="tiny-dot green"/>LIVE</span> : session ? <span className="badge">SAVED</span> : null}</div><div className="session-actions">{session && <><span className="session-date">{date(session.startedAt)}</span><button className="icon-button" onClick={exportSession} aria-label="Export session" title="Export session as JSON"><ArrowDownToLine size={17}/></button></>}{isLive && <button className="button small stop-button" onClick={() => setShowStop(true)}><Square size={11} fill="currentColor"/>End session</button>}{(demo || archived) && api && <button className="icon-button" title="Return to current session" aria-label="Return to current session" onClick={() => { setDemo(null); setArchived(null); setSelectedId(null); }}><X size={17}/></button>}</div></div>
+            <div className="timeline-toolbar"><div className="view-switch"><button className={view === 'timeline' ? 'selected' : ''} onClick={() => setView('timeline')}><Activity size={15}/>Timeline</button><button className={view === 'list' ? 'selected' : ''} onClick={() => setView('list')}><LayoutList size={15}/>Tab list</button></div><div className="toolbar-filters"><label className="search-field"><Search size={15}/><input ref={searchRef} aria-label="Search tabs" placeholder="Find a tab..." value={query} onChange={(event) => setQuery(event.target.value)}/>{query ? <button aria-label="Clear search" onClick={() => setQuery('')}><X size={12}/></button> : <kbd>⌘ K</kbd>}</label><div className="select-wrap"><select aria-label="Filter tabs" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="all">All tabs</option><option value="open">Open tabs</option><option value="closed">Closed tabs</option><option value="linked">Connected tabs</option></select><ChevronDown size={13}/></div></div></div>
+            <div className={`timeline-content ${selected ? 'has-detail' : ''}`}>
+              <div className="timeline-main">
+                {!session || !session.tabs.length ? <div className="empty-state launch-empty"><div className="empty-illustration"><span/><span/><span/><GitBranch size={30}/></div><span className="eyebrow">FOLLOW YOUR CURIOSITY</span><h3>Big ideas start with a new tab.</h3><p>Launch Helium or Chrome and watch your browsing<br/>journey come together, one connection at a time.</p><button className="button primary" onClick={() => setShowLaunch(true)}><Plus size={16}/>Launch a browser</button><button className="text-button" onClick={exploreDemo}>Or take a look around with a demo <ArrowRight size={14}/></button></div> : !filtered.length ? <div className="empty-state"><Search size={30}/><h3>No tabs on this trail.</h3><p>Try a different search or show all tabs.</p><button className="button secondary" onClick={() => { setQuery(''); setFilter('all'); }}>Clear filters</button></div> : view === 'timeline' ? <Timeline tabs={filtered} allTabs={session.tabs} session={session} now={sessionNow} selectedId={selectedId} onSelect={setSelectedId} thumbnails={showThumbnails} connections={showConnections} zoom={zoom}/> : <div className="tab-list"><div className="tab-list-heading"><span>PAGE</span><span>OPENED</span><span>DURATION</span><span>STATUS</span></div>{filtered.map((tab) => <button key={tab.id} className={`tab-list-row ${tab.id === selectedId ? 'selected' : ''}`} onClick={() => setSelectedId(tab.id)}><div className="tab-list-title"><SiteIcon tab={tab}/><div><strong>{tab.title}</strong><span>{domain(tab.url)}</span></div></div><span>{clock(tab.openedAt)}</span><span>{duration((tab.closedAt || sessionNow) - tab.openedAt)}</span><span className={`status-label ${tab.closedAt ? 'closed' : 'open'}`}><span className="tiny-dot"/>{tab.closedAt ? 'Closed' : 'Open'}</span></button>)}</div>}
+                <div className="timeline-footer"><div className="legend"><span><i className="legend-line open"/>Open tab</span><span><i className="legend-line closed"/>Closed tab</span><button className={!showConnections ? 'muted' : ''} onClick={() => setShowConnections(!showConnections)} title="Toggle opener connections"><GitBranch size={13}/>Opened from</button></div><div className="zoom-controls"><button className={!showThumbnails ? 'muted' : ''} onClick={() => setShowThumbnails(!showThumbnails)} title="Toggle thumbnails" aria-label="Toggle thumbnails" aria-pressed={showThumbnails}><Image size={15}/></button><span className="control-divider"/><button onClick={() => setZoom(Math.max(1, zoom - 0.5))} disabled={zoom === 1} aria-label="Zoom out"><Minus size={14}/></button><span>{Math.round(zoom * 100)}%</span><button onClick={() => setZoom(Math.min(4, zoom + 0.5))} disabled={zoom === 4} aria-label="Zoom in"><Plus size={14}/></button><button onClick={() => setZoom(1)} aria-label="Fit timeline" title="Fit timeline"><Maximize2 size={13}/></button></div></div>
+              </div>
+              {selected && session && <TabDetail tab={selected} session={session} now={sessionNow} onClose={() => setSelectedId(null)} onSelect={setSelectedId} isLive={isLive} onFocus={() => action(() => api!.focusTab(selected.id))} onCapture={() => action(async () => { const image = await api!.capture(selected.id); if (!image) throw new Error('This tab is no longer available for capture.'); }, 'Thumbnail refreshed.')} onCloseTab={() => action(() => api!.closeTab(selected.id), 'Tab closed. Its place in your timeline is saved.')}/>}
+            </div>
+            <div className="connection-bar"><div><span className={`tiny-dot ${isLive ? 'green' : demo ? 'orange' : 'gray'}`}/>{demo ? <><strong>You’re exploring a demo</strong><span>·</span><span>Launch a browser to make this timeline yours.</span></> : isLive ? <><strong>Connected to {session?.browser === 'helium' ? 'Helium' : 'Chrome'}</strong><span>·</span><span>127.0.0.1:{state.debugPort}</span></> : <><strong>{archived || session?.endedAt ? 'Session saved locally' : 'Ready to connect'}</strong><span>·</span><span>{archived || session?.endedAt ? 'Your trail is right where you left it.' : 'Helium or Chrome. Your choice.'}</span></>}</div>{demo ? <button onClick={() => setShowLaunch(true)}>Connect your browser <ArrowRight size={13}/></button> : <span className="connection-note"><ShieldCheck size={13}/>{isLive ? 'Recording locally' : 'Only on your device'}</span>}</div>
+          </section>
+          <div className="below-panel"><span><MousePointer2 size={14}/>Click a tab to see the details. Follow the arrows to see the story.</span><span>Less tab chaos. More <span className="serif-word">aha.</span><Sparkles size={14}/></span></div>
+          <section className="insight-card"><div className="insight-icon"><GitBranch size={21}/></div><div><strong>Every rabbit hole has a beginning.</strong><p>Those little arrows connect each tab to the one that opened it. A map of how your ideas unfold.</p></div><button onClick={() => setShowHelp(true)}>How it works <ArrowUpRight size={15}/></button><div className="insight-art"><span/><i/><span/><i/><span/></div></section>
+        </>}
+        <footer className="page-footer"><span>TABLINE <span>—</span> A little perspective on your browsing.</span><span>Built for wandering minds <span>✳</span></span></footer>
+      </main>
+    </div>
+    {showLaunch && <LaunchDialog onClose={() => setShowLaunch(false)} running={state.status === 'live' || state.status === 'launching' || state.status === 'stopping'} onDemo={exploreDemo} onLaunch={async (options) => { if (!api) return; await api.launch(options); setDemo(null); setArchived(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); setShowLaunch(false); }}/>} 
+    {showHelp && <Modal title="A map for your wandering mind." subtitle="A few small things to help you find your way." onClose={() => setShowHelp(false)}><div className="help-list"><div><Radio/><section><h3>Launch. Browse. See the story.</h3><p>Start a Helium or Chrome session. Tabline launches a separate browser profile with a local debug connection and tracks tabs as you browse.</p></section></div><div><GitBranch/><section><h3>One tab leads to another.</h3><p>Each row is a tab’s lifetime. Arrows show the parent tab reported by the browser. Tabs opened from the address bar or without an opener start a new thread.</p></section></div><div><Image/><section><h3>A little picture of where you’ve been.</h3><p>Thumbnails update after navigation and about every 20 seconds. Select a tab for its preview, navigation history, and browser controls. Some browser-internal pages may not allow screenshots.</p></section></div><div><ShieldCheck/><section><h3>Just on your device.</h3><p>Sessions, URLs, and thumbnails are saved locally in Tabline’s app data. Export a session as JSON to keep a portable copy. Ending a session closes its dedicated browser window.</p></section></div></div><button className="button primary full-width" onClick={() => setShowHelp(false)}>Got it, let’s explore <ArrowRight size={16}/></button></Modal>}
+    {showStop && <Modal title="Call it a session?" subtitle="Your trail will be right here when you need it." onClose={() => setShowStop(false)}><p className="modal-description">This closes the browser launched by Tabline and saves your timeline, thumbnails, and connections on this device.</p><div className="modal-actions"><button className="button secondary" onClick={() => setShowStop(false)}>Keep exploring</button><button className="button primary" onClick={() => action(async () => { await api!.stop(); setShowStop(false); }, 'Session saved. A good place to pick up later.')}><Check size={16}/>End & save session</button></div></Modal>}
+    {toast && <div className="toast" role="status"><span>{toast}</span><button aria-label="Dismiss notification" onClick={() => setToast(null)}><X size={16}/></button></div>}
+  </div>;
+}
+
+function Stat({ icon, label, value, detail, color }: { icon: React.ReactNode; label: string; value: string | number; detail: React.ReactNode; color: string }) {
+  return <div className="stat-card"><div className="stat-top"><span>{label}</span><span className={`stat-icon ${color}`}>{icon}</span></div><div className="stat-value">{value}<span className="stat-detail">{detail}</span></div></div>;
+}
+
+function Timeline({ tabs, allTabs, session, now, selectedId, onSelect, thumbnails, connections, zoom }: { tabs: BrowserTab[]; allTabs: BrowserTab[]; session: Session; now: number; selectedId: string | null; onSelect: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number }) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(700);
+  useEffect(() => {
+    const observer = new ResizeObserver(([entry]) => setContainerWidth(entry.contentRect.width));
+    if (viewportRef.current) observer.observe(viewportRef.current);
+    return () => observer.disconnect();
+  }, []);
+  const width = Math.max(containerWidth, 540) * zoom;
+  const padding = 42;
+  const plotWidth = width - padding - 30;
+  const span = Math.max(60000, now - session.startedAt) * 1.075;
+  const x = (time: number) => padding + Math.max(0, (time - session.startedAt) / span) * plotWidth;
+  const nowX = x(now);
+  const rowHeight = 60;
+  return <div className="timeline-scroll" ref={viewportRef}><div className="timeline-canvas" style={{ width, minHeight: Math.max(460, tabs.length * rowHeight + 68) }}>
+    <div className="axis-header"><span className="axis-start">TIME</span>{Array.from({ length: 6 }, (_, i) => <span key={i} style={{ left: padding + i * plotWidth / 5 }}>{clock(session.startedAt + span * i / 5)}</span>)}</div>
+    <div className="grid-lines">{Array.from({ length: 6 }, (_, i) => <i key={i} style={{ left: padding + i * plotWidth / 5 }}/>)}</div>
+    <div className="now-line" style={{ left: nowX }}><span>{session.endedAt ? 'END' : 'NOW'}</span><i/></div>
+    {connections && <svg className="connections" width={width} height={tabs.length * rowHeight + 68} aria-label="Tab opener connections"><defs><marker id="arrow" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#b09a7b" strokeWidth="1.2"/></marker><marker id="arrow-selected" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#d49b58" strokeWidth="1.2"/></marker></defs>{tabs.map((tab, index) => {
+      const parentIndex = tabs.findIndex((item) => item.id === tab.openerId);
+      if (parentIndex === -1) return null;
+      const parent = tabs[parentIndex];
+      const targetX = x(tab.openedAt);
+      const sourceX = Math.max(x(parent.openedAt) + 9, targetX - 18);
+      const sourceY = 66 + parentIndex * rowHeight + (parentIndex < index ? 24 : -24);
+      const targetY = 66 + index * rowHeight;
+      const bend = parentIndex < index ? 9 : -9;
+      const active = tab.id === selectedId || tab.openerId === selectedId;
+      return <path key={tab.id} d={`M ${sourceX} ${sourceY} L ${sourceX} ${targetY - bend} Q ${sourceX} ${targetY} ${sourceX + 9} ${targetY} L ${targetX - 3} ${targetY}`} stroke={active ? '#d49b58' : '#b7aa98'} strokeWidth={active ? 1.6 : 1.2} opacity={active ? 1 : 0.65} fill="none" markerEnd={`url(#${active ? 'arrow-selected' : 'arrow'})`}/>;
+    })}</svg>}
+    <div className="timeline-rows">{tabs.map((tab) => {
+      const left = x(tab.openedAt);
+      const barWidth = Math.max(8, x(tab.closedAt || now) - left);
+      const showImage = thumbnails && barWidth > 160;
+      const number = allTabs.findIndex((item) => item.id === tab.id) + 1;
+      return <div className={`timeline-row ${selectedId === tab.id ? 'selected' : ''}`} key={tab.id} style={{ height: rowHeight }}><span className="row-number">{String(number).padStart(2, '0')}</span><button title={`${tab.title}\n${tab.url}\nOpened ${clock(tab.openedAt)}${tab.closedAt ? ` · Closed ${clock(tab.closedAt)}` : ' · Still open'}`} aria-label={`View ${tab.title}`} className={`tab-bar ${siteColor(tab)} ${tab.closedAt ? 'is-closed' : ''} ${selectedId === tab.id ? 'is-selected' : ''} ${barWidth < 120 ? 'compact' : ''}`} style={{ left, width: barWidth }} onClick={() => onSelect(tab.id)}>{showImage && <span className="bar-thumbnail">{tab.thumbnail ? <img src={tab.thumbnail} alt={`Thumbnail of ${tab.title}`}/> : <Globe2 size={23}/>}</span>}<span className="bar-content"><span className="bar-title"><SiteIcon tab={tab} size="small"/><strong>{tab.title}</strong>{tab.closedAt && barWidth > 200 && <X size={11}/>}</span><span className="bar-subtitle">{domain(tab.url)}<span>·</span>{duration((tab.closedAt || now) - tab.openedAt)}</span></span>{!tab.closedAt && <span className="bar-end-dot"/>}</button>{barWidth < 120 && <button className="overflow-tab-label" style={{ left: Math.min(left + barWidth + 7, width - 115) }} onClick={() => onSelect(tab.id)}>{siteName(tab)}</button>}</div>;
+    })}</div>
+    <div className="timeline-start-note" style={{ left: padding }}><span/>The start of something</div>
+  </div></div>;
+}
+
+function TabDetail({ tab, session, now, onClose, onSelect, isLive, onFocus, onCapture, onCloseTab }: { tab: BrowserTab; session: Session; now: number; onClose: () => void; onSelect: (id: string) => void; isLive: boolean; onFocus: () => void; onCapture: () => void; onCloseTab: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const opener = session.tabs.find((item) => item.id === tab.openerId);
+  const children = session.tabs.filter((item) => item.openerId === tab.id);
+  const index = session.tabs.indexOf(tab);
+  return <aside className="tab-detail"><div className="detail-heading"><span>TAB DETAILS</span><div><button className="icon-button" aria-label="Previous tab" disabled={index === 0} onClick={() => onSelect(session.tabs[index - 1].id)}><ChevronLeft size={15}/></button><button className="icon-button" aria-label="Next tab" disabled={index === session.tabs.length - 1} onClick={() => onSelect(session.tabs[index + 1].id)}><ChevronRight size={15}/></button><button className="icon-button" aria-label="Close tab details" onClick={onClose}><X size={16}/></button></div></div><div className="detail-body">
+    <div className="detail-preview">{tab.thumbnail ? <img src={tab.thumbnail} alt={`Preview of ${tab.title}`}/> : <div className="no-preview"><Globe2 size={32}/><span>{tab.closedAt ? 'No preview captured' : 'Waiting for a preview'}</span></div>}<span className="preview-badge"><span className={`tiny-dot ${tab.closedAt ? 'gray' : 'green'}`}/>{tab.closedAt ? 'Last snapshot' : 'Latest snapshot'}</span>{isLive && !tab.closedAt && <button disabled={busy} aria-label="Refresh thumbnail" title="Refresh thumbnail" onClick={async () => { setBusy(true); try { await onCapture(); } finally { setBusy(false); } }}><RefreshCw size={13} className={busy ? 'spinning' : ''}/></button>}</div>
+    <div className="detail-tab-title"><SiteIcon tab={tab}/><h3>{tab.title}</h3></div><div className="detail-url" title={tab.url}>{tab.url.replace(/^https?:\/\//, '')}</div><span className={`status-label ${tab.closedAt ? 'closed' : 'open'}`}><span className="tiny-dot"/>{tab.closedAt ? 'Closed tab' : 'Currently open'}</span>
+    <div className="detail-metadata"><div><span>Opened at</span><strong>{clock(tab.openedAt)}<span className="seconds">:{String(new Date(tab.openedAt).getSeconds()).padStart(2, '0')}</span></strong></div><div><span>Time {tab.closedAt ? 'open' : 'so far'}</span><strong>{duration((tab.closedAt || now) - tab.openedAt)}</strong></div>{tab.closedAt && <div><span>Closed at</span><strong>{clock(tab.closedAt)}</strong></div>}</div>
+    <div className="detail-section"><div className="detail-section-label"><GitBranch size={14}/><span>THE CONNECTION</span></div>{opener ? <><p>Opened from</p><button className="related-tab" onClick={() => onSelect(opener.id)}><SiteIcon tab={opener} size="small"/><span>{opener.title}</span><ArrowUpRight size={13}/></button></> : <p className="root-note">A fresh thread. No parent tab was reported.</p>}{children.length > 0 && <><p>Led to {children.length} {children.length === 1 ? 'new tab' : 'new tabs'}</p>{children.map((child) => <button className="related-tab" key={child.id} onClick={() => onSelect(child.id)}><SiteIcon tab={child} size="small"/><span>{child.title}</span><ArrowDownToLine size={12}/></button>)}</>}</div>
+    <div className="detail-section navigation-section"><div className="detail-section-label"><Clock3 size={14}/><span>PAGE HISTORY</span><span className="count-pill">{tab.navigations.length}</span></div>{tab.navigations.slice(-4).reverse().map((nav, i) => <div className="navigation-item" key={`${nav.at}-${i}`}><span className="navigation-dot"/><div><strong title={nav.url}>{nav.title || domain(nav.url)}</strong><span>{clock(nav.at)}</span></div></div>)}{tab.navigations.length > 4 && <span className="history-more">+ {tab.navigations.length - 4} earlier pages in the export</span>}</div>
+    {isLive && !tab.closedAt ? <div className="detail-actions"><button className="button secondary full-width" onClick={onFocus}>Go to tab<ExternalLink size={14}/></button><button className="text-button close-tab-button" onClick={onCloseTab}><X size={13}/>Close browser tab</button></div> : <div className="detail-footnote"><ShieldCheck size={12}/>{session.id === 'demo' ? 'A little preview of what’s possible.' : 'This moment is saved on your device.'}</div>}
+  </div></aside>;
+}
+
+function Modal({ title, subtitle, children, onClose }: { title: string; subtitle: string; children: React.ReactNode; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement;
+    const element = dialogRef.current;
+    const focusable = () => Array.from(element?.querySelectorAll<HTMLElement>('button:not(:disabled), input, select, [tabindex="0"]') || []);
+    focusable()[0]?.focus();
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      const items = focusable();
+      if (event.shiftKey && document.activeElement === items[0]) { event.preventDefault(); items.at(-1)?.focus(); }
+      else if (!event.shiftKey && document.activeElement === items.at(-1)) { event.preventDefault(); items[0]?.focus(); }
+    };
+    element?.addEventListener('keydown', trap);
+    return () => { element?.removeEventListener('keydown', trap); previous?.focus(); };
+  }, []);
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" ref={dialogRef}><div className="modal-top"><span className="modal-logo"><Layers3 size={23}/></span><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={20}/></button></div><h2 id="modal-title">{title}</h2><p className="modal-subtitle">{subtitle}</p>{children}</div></div>;
+}
+
+function LaunchDialog({ onClose, onLaunch, onDemo, running }: { onClose: () => void; onLaunch: (options: { browser: 'helium' | 'chrome'; executable?: string; url: string; name: string }) => Promise<void>; onDemo: () => void; running: boolean }) {
+  const [browsers, setBrowsers] = useState<BrowserChoice[]>([]);
+  const [browser, setBrowser] = useState<'helium' | 'chrome'>('helium');
+  const [executable, setExecutable] = useState('');
+  const [name, setName] = useState('A new rabbit hole');
+  const [url, setUrl] = useState('https://www.google.com');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [advanced, setAdvanced] = useState(false);
+  useEffect(() => { api?.getBrowsers().then((items) => { setBrowsers(items); if (!items.find((item) => item.id === 'helium')?.path && items.find((item) => item.id === 'chrome')?.path) setBrowser('chrome'); }).catch((err) => setError(err.message)); }, []);
+  return <Modal title="Where will curiosity take you?" subtitle="Start a fresh browser session. We’ll connect the dots." onClose={busy ? () => {} : onClose}>
+    {!api ? <div className="desktop-notice"><Monitor size={19}/><div><strong>You’re in the web preview.</strong><p>Browser launching is available in the Electron desktop app. Run <code>npm run dev</code> from this project to connect a local browser.</p></div></div> : running ? <div className="desktop-notice"><Radio size={19}/><div><strong>A session is already running.</strong><p>End your current session before starting a new one.</p></div></div> : null}
+    <form onSubmit={async (event) => { event.preventDefault(); setBusy(true); setError(''); try { await onLaunch({ browser, executable: executable || undefined, url, name }); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to launch the browser.'); } finally { setBusy(false); } }}>
+      <label className="field-label">YOUR BROWSER</label><div className="browser-options">{(['helium', 'chrome'] as const).map((item) => <button type="button" key={item} className={`browser-option ${browser === item ? 'selected' : ''}`} onClick={() => { setBrowser(item); setExecutable(''); }}><span className={`browser-logo ${item}`}>{item === 'helium' ? <span>He</span> : <Globe2 size={24}/>}</span><span><strong>{item === 'helium' ? 'Helium' : 'Google Chrome'}</strong><small>{api ? browsers.find((b) => b.id === item)?.path ? 'Detected on your device' : 'Choose an executable' : 'Chromium-powered'}</small></span><span className="radio-circle">{browser === item && <span/>}</span></button>)}</div>
+      <label className="field-label" htmlFor="session-name">SESSION NAME</label><input id="session-name" className="form-input" value={name} onChange={(event) => setName(event.target.value)} placeholder="A new rabbit hole" maxLength={80}/>
+      <label className="field-label" htmlFor="start-url">STARTING PAGE</label><input id="start-url" className="form-input" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://www.google.com"/>
+      <button type="button" className="advanced-toggle" onClick={() => setAdvanced(!advanced)}><Settings2 size={14}/>Browser executable <ChevronDown size={13} className={advanced ? 'rotate' : ''}/></button>
+      {advanced && <div className="executable-field"><input className="form-input" aria-label="Browser executable path" value={executable} onChange={(event) => setExecutable(event.target.value)} placeholder={browsers.find((item) => item.id === browser)?.path || 'Full path to browser executable'}/><button type="button" className="button secondary" disabled={!api} onClick={async () => { try { const result = await api!.chooseExecutable(); if (result) setExecutable(result); } catch (err) { setError(String(err)); } }}><FolderOpen size={16}/>Browse</button></div>}
+      <div className="profile-note"><ShieldCheck size={15}/><span>A dedicated browser profile. A localhost-only connection.<br/>Your usual browser stays right where it is.</span></div>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      <button type="submit" className="button primary full-width launch-submit" disabled={!api || running || busy}>{busy ? <RefreshCw size={16} className="spinning"/> : <ArrowUpRight size={17}/>} {busy ? 'Connecting your browser…' : `Launch ${browser === 'helium' ? 'Helium' : 'Chrome'}`}</button>
+      {!running && <button type="button" className="text-button demo-link" onClick={onDemo}>Just looking? Explore a demo <ArrowRight size={14}/></button>}
+    </form>
+  </Modal>;
+}

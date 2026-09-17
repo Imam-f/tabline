@@ -1,0 +1,104 @@
+# Tabline
+
+A local-first Electron app that turns your Helium or Chrome browsing session into a visual timeline. See when every tab opened and closed, preview its thumbnail, and follow arrows back to the tab that opened it.
+
+## Run
+
+Requires **Node.js 22+** and a local installation of **Helium** or **Google Chrome** (Chromium also works with a custom executable path).
+
+```sh
+npm install
+npm run dev
+```
+
+Click **New session**, choose a browser, and launch it. Common installation locations are detected automatically. For a portable installation, AppImage, or a browser installed elsewhere, expand **Browser executable** and select or paste the executable path. On macOS, use the binary inside the application bundle, for example `/Applications/Helium.app/Contents/MacOS/Helium`.
+
+To run the built app:
+
+```sh
+npm run build
+npm start
+```
+
+To build a distributable for your operating system:
+
+```sh
+npm run dist
+```
+
+Installers are placed in `release/`. `npm run dist:dir` creates an unpacked desktop build using the locally installed Electron runtime. On Windows, open `release/win-unpacked/Tabline.exe` (keep the whole folder together). Signing credentials are needed if you want to distribute signed builds.
+
+## What it does
+
+- **Browser launcher** — Helium by default, with Chrome as an option and a custom executable picker. If only Chrome is installed, it is preselected.
+- **Live timeline** — one lane per tab, with its opening time, lifetime, and closing time. Zoom, search, and filter open, closed, or connected tabs.
+- **Opener arrows** — connect a new tab to its parent using Chromium’s `TargetInfo.openerId`.
+- **Thumbnails** — real JPEG snapshots after page changes and approximately every 20 seconds. Select a tab to view a larger preview or refresh it manually.
+- **Tab details** — page history, parent and child tabs, duration, and buttons to focus or close an open browser tab.
+- **Saved sessions** — automatically persist timelines, navigation history, and thumbnails locally. Reopen a session or export it as portable JSON.
+- **Demo mode** — explore an example timeline without launching a browser. The standalone web preview (`npm run dev:web`) uses the demo; browser launching requires Electron.
+
+## How it works
+
+The Electron main process starts the selected Chromium-based browser with:
+
+```text
+--remote-debugging-port=0
+--remote-debugging-address=127.0.0.1
+--user-data-dir=<Tabline app data>/browser-data/profiles/<browser>
+```
+
+It reads the browser’s `DevToolsActivePort` file, connects to its local DevTools WebSocket, and subscribes to `Target` discovery events. Screenshots use short-lived flattened target sessions and `Page.captureScreenshot`. **No companion extension is required.**
+
+Tabline uses a dedicated, persistent browser profile per browser. This is required by current Chrome remote-debugging restrictions and keeps the tracked browser separate from your normal profile. Bookmarks, logins, and browser state within this profile persist between sessions. Only one tracked browser session runs at a time. Ending the session (or quitting the desktop app) closes the managed browser and saves its timeline.
+
+The renderer is sandboxed with context isolation, no Node integration, a restrictive Content Security Policy, and a small preload IPC bridge. Debugging binds to localhost with an automatically assigned port. The app uses local fonts and does not send timeline data to a service.
+
+### Details worth knowing
+
+- Arrows are shown when the browser reports an opener. Tabs created through the address bar, bookmarks, or an operation that does not retain an opener can appear as independent roots. A companion extension is not used to infer missing relationships.
+- Existing/restored tabs at connection time are timestamped when Tabline first observes them. The DevTools Protocol does not provide a historical tab creation timestamp.
+- A thumbnail is the latest captured viewport, not a recording of the page. Protected/internal pages or tabs closed immediately may have no screenshot. Closed tabs keep the last successful snapshot.
+- A tab’s navigation history is recorded during the session. The detail panel shows its four latest pages; the JSON export contains the full history.
+- Long sessions with many thumbnails increase local storage usage. To remove sessions, quit the app and delete the relevant JSON files from the sessions directory.
+
+## Local data
+
+Data lives inside Electron’s platform-specific `userData` directory:
+
+| Platform | Typical location |
+| --- | --- |
+| Windows | `%APPDATA%/tabline/browser-data/` |
+| macOS | `~/Library/Application Support/tabline/browser-data/` |
+| Linux | `~/.config/tabline/browser-data/` |
+
+The `sessions/` folder contains JSON sessions (including base64 JPEG thumbnails). The `profiles/` folder contains the dedicated browser profiles. URLs and visible page content can be present in session exports.
+
+## Development & checks
+
+```sh
+npm test             # CDP transport, target lifecycle, URL validation
+npm run build        # TypeScript check and production renderer build
+npm run test:browser # real-browser integration check using local fixture pages
+npm run test:desktop # production Electron UI and preload end-to-end check
+```
+
+The browser integration check detects an installed browser, launches it with a temporary profile, opens a child tab, captures a JPEG, navigates, focuses and closes tabs, then verifies the saved session. Set `TABLINE_BROWSER_PATH` to test a specific executable and `TABLINE_TEST_TEMP` to choose a temporary-directory parent.
+
+### Project structure
+
+```text
+electron/
+  main.cjs       Electron window, IPC, and lifecycle
+  preload.cjs    Sandboxed renderer bridge
+  browser.cjs    Browser launch, tracking, capture, persistence
+  cdp.cjs        DevTools WebSocket client
+src/
+  App.tsx        Timeline, tab details, launcher, saved sessions
+  demo.ts        Clearly labeled interactive demo data
+  styles.css     Responsive desktop interface
+scripts/
+  browser-smoke.cjs
+tests/
+  browser.test.cjs
+```

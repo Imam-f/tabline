@@ -1,0 +1,46 @@
+{
+  "name": "tabline",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A local-first browser timeline for Helium and Chrome",
+  "main": "electron/main.cjs",
+  "author": "Tabline",
+  "license": "MIT",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && node scripts/start-electron.cjs --dev\"",
+    "dev:web": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "start": "node scripts/start-electron.cjs",
+    "test": "node --test tests/*.test.cjs",
+    "test:browser": "node scripts/browser-smoke.cjs",
+    "test:desktop": "npm run build && node scripts/desktop-smoke.cjs",
+    "dist": "npm run build && electron-builder",
+    "dist:dir": "npm run build && electron-builder --dir --config.electronDist=node_modules/electron/dist"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "electron": "^44.4.1",
+    "electron-builder": "^26.0.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "wait-on": "^8.0.2"
+  },
+  "build": {
+    "appId": "local.tabline.app",
+    "productName": "Tabline",
+    "files": ["dist/**/*", "electron/**/*", "package.json"],
+    "directories": { "output": "release" },
+    "win": { "target": "nsis" },
+    "mac": { "target": "dmg", "category": "public.app-category.developer-tools" },
+    "linux": { "target": "AppImage", "category": "Development" }
+  }
+}
