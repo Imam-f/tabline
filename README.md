@@ -2,6 +2,16 @@
 
 A local-first Electron app that turns your Helium or Chrome browsing session into a visual timeline. See when every tab opened and closed, preview its thumbnail, and follow arrows back to the tab that opened it.
 
+## Screenshots
+
+The timeline connects each tab to the tab that opened it, with thumbnails and a details panel.
+
+![Browser timeline showing tabs connected by opener arrows, with thumbnails and a tab details panel](docs/browser-timeline.png)
+
+The tab list view is a compact table of pages, open time, duration, and status.
+
+![Tab list view with columns for page, opened time, duration, and status](docs/tab-list.png)
+
 ## Run
 
 Requires **Node.js 22+** and a local installation of **Helium** or **Google Chrome** (Chromium also works with a custom executable path).
