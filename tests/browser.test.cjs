@@ -91,6 +91,16 @@ test('merges tab-group events without requiring navigation activity', () => {
   clearTimeout(controller.persistTimer);
 });
 
+test('passes native window bounds and browser process to the desktop resolver on Windows', async (context) => {
+  if (process.platform !== 'win32') return context.skip('Windows-only resolver');
+  const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-desktop-')));
+  controller.process = { pid: 4321 };
+  let received;
+  controller.desktopResolver = async (...args) => { received = args; return 'desktop-guid'; };
+  assert.equal(await controller.getDesktopId('9', { left: 1, top: 2, width: 3, height: 4 }), 'desktop-guid');
+  assert.deepEqual(received, ['9', { left: 1, top: 2, width: 3, height: 4 }, 4321]);
+});
+
 test('localhost group bridge applies group color metadata to the matching tab', async () => {
   const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-group-bridge-')));
   controller.session = { tabs: [{ id: 'target', windowId: '42', url: 'https://example.com', title: 'Example', groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [] }] };

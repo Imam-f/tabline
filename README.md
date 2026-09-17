@@ -33,7 +33,7 @@ Installers are placed in `release/`. `npm run dist:dir` creates an unpacked desk
 - **Browser launcher** — Helium by default, with Chrome as an option and a custom executable picker. If only Chrome is installed, it is preselected.
 - **Live timeline** — one lane per tab, with its opening time, lifetime, and closing time. Zoom, search, and filter open, closed, or connected tabs.
 - **Opener arrows** — connect a new tab to its parent using Chromium’s `TargetInfo.openerId`.
-- **Window grouping** — resolve each tab to its Chromium browser window with `Browser.getWindowForTarget` and group the timeline by window. Chromium’s DevTools Protocol does not expose virtual-desktop membership; those groups are labeled explicitly as unavailable rather than guessed.
+- **Window grouping** — resolve each tab to its Chromium browser window with `Browser.getWindowForTarget` and group the timeline by window. On Windows, Tabline also maps that window to its native virtual desktop, including desktops that are not currently visible. Other platforms label virtual-desktop membership as unavailable.
 - **Window move history** — browser-window membership is polled independently every second, rather than only when a tab navigates or becomes active. Each detected move is timestamped in `windowHistory` and shown in the tab details panel.
 - **Tab groups** — the managed browser loads the bundled Tabline companion extension, which reports Chromium tab-group membership, group title, color, collapsed state, and changes over a localhost-only bridge. Group updates are recorded independently of page navigation.
 - **Thumbnails** — real JPEG snapshots after page changes and approximately every 60 seconds. Select a tab to view a larger preview or refresh it manually.

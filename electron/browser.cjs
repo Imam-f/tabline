@@ -263,7 +263,7 @@ class BrowserController extends EventEmitter {
       const moved = tab.windowId && tab.windowId !== windowId;
       tab.windowId = windowId;
       tab.windowBounds = location.bounds || null;
-      tab.desktopId = await this.getDesktopId(tab.windowId);
+      tab.desktopId = await this.getDesktopId(tab.windowId, location.bounds);
       if (!tab.windowHistory) tab.windowHistory = [];
       const last = tab.windowHistory.at(-1);
       if (!last || last.windowId !== tab.windowId || last.desktopId !== tab.desktopId) {
@@ -280,9 +280,9 @@ class BrowserController extends EventEmitter {
     this.publish();
   }
 
-  async getDesktopId(windowId) {
+  async getDesktopId(windowId, bounds) {
     if (process.platform === 'win32' && typeof this.desktopResolver === 'function') {
-      try { return (await this.desktopResolver(windowId)) || 'unknown'; } catch {}
+      try { return (await this.desktopResolver(windowId, bounds, this.process?.pid)) || 'unknown'; } catch {}
     }
     return 'unknown';
   }

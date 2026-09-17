@@ -58,6 +58,7 @@ async function waitFor(predicate, label, timeout = 25000) {
     await delay(100);
     await evaluate(`document.querySelector('.launch-submit').click()`);
     await waitFor(() => evaluate(`!!document.querySelector('.live-badge') && document.querySelector('.tab-bar')?.title.includes('Desktop integration page')`), 'real browser tab in live renderer');
+    if (process.platform === 'win32') await waitFor(() => evaluate(`!document.querySelector('.timeline-group-heading')?.innerText.includes('Virtual desktop not available')`), 'native virtual desktop resolution');
     await evaluate(`document.querySelector('.tab-bar').click()`);
     await waitFor(() => evaluate(`document.querySelector('.detail-preview img')?.src.startsWith('data:image/jpeg')`), 'real screenshot in detail panel');
     await evaluate(`document.querySelector('.stop-button').click()`);

@@ -2,10 +2,12 @@ const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { BrowserController, detectBrowsers } = require('./browser.cjs');
+const { VirtualDesktopResolver } = require('./virtual-desktop.cjs');
 
 let window;
 let controller;
 let quitting = false;
+let virtualDesktopResolver;
 const isDev = process.env.TABLINE_DEV === '1';
 
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -16,9 +18,10 @@ else {
       ? path.join(process.resourcesPath, 'app.asar.unpacked', 'electron', 'tabline-extension')
       : path.join(__dirname, 'tabline-extension');
     controller = new BrowserController(path.join(app.getPath('userData'), 'browser-data'), extensionPath);
-    // CDP exposes browser windows, but not virtual desktops. Keep this hook
-    // injectable for a future native Windows virtual-desktop resolver.
-    controller.desktopResolver = async () => 'unknown';
+    if (process.platform === 'win32') {
+      virtualDesktopResolver = new VirtualDesktopResolver();
+      controller.desktopResolver = (_windowId, bounds, processId) => virtualDesktopResolver.resolve(processId, bounds);
+    }
     controller.on('change', (state) => { if (window && !window.isDestroyed()) window.webContents.send('state:changed', state); });
     controller.on('storage-error', (message) => { if (window && !window.isDestroyed()) window.webContents.send('state:changed', { ...controller.snapshot(), error: `Could not save session: ${message}` }); });
     ipcMain.handle('state:get', () => controller.snapshot());
@@ -53,6 +56,7 @@ else {
     }
   });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+  app.on('will-quit', () => virtualDesktopResolver?.dispose());
 }
 
 function createWindow() {
