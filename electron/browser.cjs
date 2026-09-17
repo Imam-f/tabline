@@ -43,7 +43,7 @@ function upsertTarget(session, info, now = Date.now()) {
   if (info.type !== 'page') return null;
   let tab = session.tabs.find((item) => item.id === info.targetId);
   if (!tab) {
-    tab = { id: info.targetId, title: info.title || 'New tab', url: info.url || 'about:blank', openedAt: now, closedAt: null, openerId: info.openerId || null, windowId: info.windowId || null, desktopId: info.desktopId || 'unknown', windowHistory: [], groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [], thumbnail: null, thumbnailAt: null, navigations: [] };
+    tab = { id: info.targetId, title: info.title || 'New tab', url: info.url || 'about:blank', openedAt: now, closedAt: null, openAtEnd: true, openerId: info.openerId || null, windowId: info.windowId || null, desktopId: info.desktopId || 'unknown', windowHistory: [], extensionTabId: null, extensionWindowId: null, tabIndex: null, pinned: false, active: false, orderHistory: [], groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [], thumbnail: null, thumbnailAt: null, navigations: [] };
     session.tabs.push(tab);
   }
   if (info.openerId) tab.openerId = info.openerId;
@@ -57,6 +57,30 @@ function upsertTarget(session, info, now = Date.now()) {
   tab.title = info.title || tab.title;
   tab.url = info.url || tab.url;
   return tab;
+}
+
+function restoreUrl(input) {
+  if (input === 'about:blank') return input;
+  try { const url = new URL(input); return ['http:', 'https:'].includes(url.protocol) ? url.href : null; } catch { return null; }
+}
+
+function buildRestorePlan(session) {
+  const hasOpenSnapshot = session.tabs.some((tab) => typeof tab.openAtEnd === 'boolean');
+  let candidates = hasOpenSnapshot
+    ? session.tabs.filter((tab) => tab.openAtEnd)
+    : session.tabs.filter((tab) => session.endedAt && tab.closedAt && Math.abs(tab.closedAt - session.endedAt) < 2000);
+  if (!candidates.length && !hasOpenSnapshot) candidates = session.tabs;
+  const windows = new Map();
+  let skipped = 0;
+  for (const tab of candidates.slice(0, 250)) {
+    const url = restoreUrl(tab.url);
+    if (!url) { skipped++; continue; }
+    const sourceWindowId = String(tab.extensionWindowId ?? tab.windowId ?? 'default');
+    if (!windows.has(sourceWindowId)) windows.set(sourceWindowId, { sourceWindowId, desktopId: tab.desktopId || 'unknown', bounds: tab.windowBounds || null, tabs: [] });
+    windows.get(sourceWindowId).tabs.push({ sourceId: tab.id, url, title: tab.title, index: Number.isInteger(tab.tabIndex) ? tab.tabIndex : Number.MAX_SAFE_INTEGER, pinned: !!tab.pinned, active: !!tab.active, openerSourceId: tab.openerId || null, groupId: tab.groupId, groupTitle: tab.groupTitle, groupColor: tab.groupColor, groupCollapsed: !!tab.groupCollapsed, openedAt: tab.openedAt });
+  }
+  for (const window of windows.values()) window.tabs.sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.index - b.index || a.openedAt - b.openedAt);
+  return { sourceSessionId: session.id, windows: [...windows.values()].filter((window) => window.tabs.length), requested: candidates.length, skipped };
 }
 
 class BrowserController extends EventEmitter {
@@ -75,6 +99,9 @@ class BrowserController extends EventEmitter {
     this.extensionPath = extensionPath;
     this.groupBridge = null;
     this.groupToken = null;
+    this.pendingRestore = null;
+    this.restoreResolve = null;
+    this.closingBrowser = false;
     fs.mkdirSync(path.join(dataDir, 'sessions'), { recursive: true });
   }
 
@@ -105,7 +132,7 @@ class BrowserController extends EventEmitter {
   loadSession(id) {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid session ID');
     const session = JSON.parse(fs.readFileSync(path.join(this.dataDir, 'sessions', `${id}.json`), 'utf8'));
-    session.tabs.forEach((tab) => { tab.windowHistory ||= []; tab.desktopId ||= 'unknown'; tab.windowId ||= null; tab.groupId ??= null; tab.groupTitle ??= null; tab.groupColor ??= null; tab.groupCollapsed ||= false; tab.groupHistory ||= []; });
+    session.tabs.forEach((tab) => { tab.windowHistory ||= []; tab.desktopId ||= 'unknown'; tab.windowId ||= null; tab.extensionTabId ??= null; tab.extensionWindowId ??= null; tab.tabIndex ??= null; tab.pinned ||= false; tab.active ||= false; tab.orderHistory ||= []; tab.groupId ??= null; tab.groupTitle ??= null; tab.groupColor ??= null; tab.groupCollapsed ||= false; tab.groupHistory ||= []; });
     // A session interrupted by an app/process crash has no explicit end time.
     if (!session.endedAt && session.id !== this.session?.id) {
       session.endedAt = Math.max(session.startedAt, ...session.tabs.flatMap((tab) => [tab.openedAt, tab.closedAt || 0, tab.thumbnailAt || 0, ...tab.navigations.map((nav) => nav.at)]));
@@ -121,6 +148,7 @@ class BrowserController extends EventEmitter {
     if (!executable || !fs.existsSync(executable)) throw new Error(`${browser === 'helium' ? 'Helium' : 'Chrome'} was not found. Choose its executable in the launch settings.`);
     const url = validStartUrl(options.url);
     this.lastError = null;
+    this.closingBrowser = false;
     this.status = 'launching';
     this.publish();
     const profile = path.join(this.dataDir, 'profiles', browser);
@@ -167,7 +195,7 @@ class BrowserController extends EventEmitter {
       this.client.on('Target.targetInfoChanged', ({ targetInfo }) => this.onTarget(targetInfo));
       this.client.on('Target.targetDestroyed', ({ targetId }) => {
         const tab = this.session?.tabs.find((item) => item.id === targetId);
-        if (tab && !tab.closedAt) { tab.closedAt = Date.now(); this.publish(); }
+        if (tab && !tab.closedAt) { tab.closedAt = Date.now(); if (!this.closingBrowser) tab.openAtEnd = false; this.publish(); }
         clearTimeout(this.captureTimers.get(targetId));
         this.captureTimers.delete(targetId);
       });
@@ -212,12 +240,19 @@ class BrowserController extends EventEmitter {
   async startGroupBridge() {
     this.groupToken = randomUUID();
     this.groupBridge = http.createServer((request, response) => {
-      if (request.method === 'OPTIONS' && request.url === '/tab-groups') {
-        response.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
+      if (request.method === 'OPTIONS') {
+        response.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
         response.end();
         return;
       }
-      if (request.method !== 'POST' || request.url !== '/tab-groups') {
+      if (request.method === 'GET' && request.url === '/restore') {
+        if (!this.pendingRestore || this.pendingRestore.delivered) { response.writeHead(204, { 'Access-Control-Allow-Origin': '*' }); response.end(); return; }
+        this.pendingRestore.delivered = true;
+        response.writeHead(200, { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' });
+        response.end(JSON.stringify(this.pendingRestore.plan));
+        return;
+      }
+      if (request.method !== 'POST' || !['/tab-groups', '/restore-result'].includes(request.url)) {
         response.writeHead(404); response.end(); return;
       }
       let body = '';
@@ -225,7 +260,12 @@ class BrowserController extends EventEmitter {
       request.on('end', () => {
         try {
           const message = JSON.parse(body);
-          for (const groupTab of Array.isArray(message.tabs) ? message.tabs : []) this.onGroupInfo(groupTab);
+          if (request.url === '/restore-result') {
+            this.restoreResolve?.(message);
+            this.restoreResolve = null;
+          } else {
+            for (const groupTab of Array.isArray(message.tabs) ? message.tabs : []) this.onGroupInfo(groupTab);
+          }
           response.writeHead(204, { 'Access-Control-Allow-Origin': '*' }); response.end();
         } catch { response.writeHead(400); response.end(); }
       });
@@ -244,6 +284,14 @@ class BrowserController extends EventEmitter {
     if (!tab) return;
     const groupId = Number.isInteger(info.groupId) && info.groupId >= 0 ? info.groupId : null;
     const changed = tab.groupId !== groupId || tab.groupTitle !== (info.groupTitle || null) || tab.groupColor !== (info.groupColor || null) || tab.groupCollapsed !== (info.groupCollapsed || false);
+    const orderChanged = Number.isInteger(info.index) && (tab.tabIndex !== info.index || tab.extensionWindowId !== info.windowId);
+    tab.extensionTabId = Number.isInteger(info.tabId) ? info.tabId : tab.extensionTabId ?? null;
+    tab.extensionWindowId = Number.isInteger(info.windowId) ? info.windowId : tab.extensionWindowId ?? null;
+    tab.tabIndex = Number.isInteger(info.index) ? info.index : tab.tabIndex ?? null;
+    tab.pinned = typeof info.pinned === 'boolean' ? info.pinned : !!tab.pinned;
+    tab.active = typeof info.active === 'boolean' ? info.active : !!tab.active;
+    if (!tab.orderHistory) tab.orderHistory = [];
+    if (orderChanged) tab.orderHistory.push({ windowId: tab.extensionWindowId, index: tab.tabIndex, at: Date.now() });
     tab.groupId = groupId;
     tab.groupTitle = groupId === null ? null : info.groupTitle || null;
     tab.groupColor = groupId === null ? null : info.groupColor || null;
@@ -336,6 +384,8 @@ class BrowserController extends EventEmitter {
   async stop() {
     if (this.status !== 'live') return;
     this.status = 'stopping';
+    this.closingBrowser = true;
+    for (const tab of this.session.tabs) if (!tab.closedAt) tab.openAtEnd = true;
     this.publish();
     try { await this.client.send('Browser.close'); } catch {}
     this.finish();
@@ -357,11 +407,56 @@ class BrowserController extends EventEmitter {
     this.groupBridge?.close();
     this.groupBridge = null;
     this.groupToken = null;
+    this.pendingRestore = null;
+    this.restoreResolve?.(null);
+    this.restoreResolve = null;
     this.process = null;
     this.debugPort = null;
     if (this.status !== 'error') this.status = 'idle';
     this.publish();
   }
+
+  async restoreSession(id, options = {}) {
+    const saved = this.loadSession(id);
+    const plan = buildRestorePlan(saved);
+    if (!plan.windows.length) throw new Error('This session has no restorable web tabs.');
+    this.pendingRestore = { plan, delivered: false };
+    const resultPromise = new Promise((resolve) => { this.restoreResolve = resolve; });
+    try {
+      await this.launch({ browser: saved.browser, executable: options.executable, name: `${saved.name} (restored)`, url: plan.windows[0].tabs[0].url });
+      this.session.restoredFromSessionId = saved.id;
+      let result = await Promise.race([resultPromise, delay(5000).then(() => null)]);
+      if (!result && this.pendingRestore?.delivered) result = await Promise.race([resultPromise, delay(30000).then(() => null)]);
+      this.restoreResolve = null;
+      if (!result && this.pendingRestore?.delivered) {
+        result = { opened: this.session.tabs.filter((tab) => !tab.closedAt).length, failed: 0, groupsRestored: false, warnings: ['The companion extension is still finishing the restore in the browser.'] };
+      }
+      if (!result) {
+        let opened = 1;
+        const failures = [];
+        let anchorTargetId = this.session.tabs.find((tab) => !tab.closedAt)?.id;
+        for (let windowIndex = 0; windowIndex < plan.windows.length; windowIndex++) {
+          const window = plan.windows[windowIndex];
+          for (let tabIndex = windowIndex === 0 ? 1 : 0; tabIndex < window.tabs.length; tabIndex++) {
+            try {
+              if (tabIndex > 0 && anchorTargetId) await this.client.send('Target.activateTarget', { targetId: anchorTargetId });
+              const created = await this.client.send('Target.createTarget', { url: window.tabs[tabIndex].url, newWindow: tabIndex === 0 && windowIndex > 0 });
+              if (tabIndex === 0) anchorTargetId = created.targetId;
+              opened++;
+            } catch (error) { failures.push(error.message); }
+          }
+        }
+        result = { opened, failed: failures.length, groupsRestored: false, warnings: ['The companion extension was unavailable; tab pinning, exact order, groups, and opener links could not be restored.', ...failures] };
+      }
+      this.pendingRestore = null;
+      this.publish();
+      return { ...result, requested: plan.requested, skipped: plan.skipped, state: this.snapshot() };
+    } catch (error) {
+      this.pendingRestore = null;
+      this.restoreResolve = null;
+      throw error;
+    }
+  }
 }
 
-module.exports = { BrowserController, browserCandidates, detectBrowsers, validStartUrl, upsertTarget };
+module.exports = { BrowserController, browserCandidates, buildRestorePlan, detectBrowsers, validStartUrl, upsertTarget };

@@ -67,10 +67,16 @@ async function waitFor(predicate, label, timeout = 25000) {
     await waitFor(() => evaluate(`!document.querySelector('.live-badge') && !document.querySelector('.modal')`), 'session stopped');
     await evaluate(`[...document.querySelectorAll('.nav-item')].find(e=>e.innerText.includes('Saved sessions')).click()`);
     await waitFor(() => evaluate(`document.querySelectorAll('.saved-session').length === 1`), 'saved session list');
-    await evaluate(`document.querySelector('.saved-session').click()`);
+    await evaluate(`document.querySelector('.saved-session-view').click()`);
     await waitFor(() => evaluate(`!!document.querySelector('.tab-bar.is-closed')`), 'archived timeline reopened');
+    await evaluate(`[...document.querySelectorAll('.nav-item')].find(e=>e.innerText.includes('Saved sessions')).click()`);
+    await waitFor(() => evaluate(`!!document.querySelector('.restore-session:not(:disabled)')`), 'restore action');
+    await evaluate(`document.querySelector('.restore-session').click()`);
+    await waitFor(() => evaluate(`!!document.querySelector('.live-badge') && document.querySelector('.tab-bar')?.title.includes('Desktop integration page')`), 'saved session restored into a new live browser', 40000);
+    await evaluate(`window.tabline.stop()`);
+    await waitFor(() => evaluate(`!document.querySelector('.live-badge')`), 'restored session stopped');
     assert.deepEqual(rendererErrors, [], 'production renderer should have no uncaught errors');
-    console.log('PASS: production Electron window, sandboxed preload, browser launch through UI, live timeline, thumbnail, stop, save, and reopen.');
+    console.log('PASS: production Electron window, sandboxed preload, browser launch through UI, live timeline, thumbnail, stop, save, reopen, and restore.');
   } finally {
     if (evaluate) await evaluate(`window.tabline.stop()`).catch(() => {});
     client?.close();

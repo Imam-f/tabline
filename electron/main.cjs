@@ -37,6 +37,7 @@ else {
     ipcMain.handle('tab:capture', (_event, id) => controller.capture(id));
     ipcMain.handle('sessions:list', () => controller.listSessions());
     ipcMain.handle('sessions:load', (_event, id) => controller.loadSession(id));
+    ipcMain.handle('sessions:restore', (_event, id, options) => controller.restoreSession(id, options));
     ipcMain.handle('session:export', async (_event, session) => {
       const result = await dialog.showSaveDialog(window, { title: 'Export session', defaultPath: `tabline-${new Date(session.startedAt).toISOString().slice(0, 10)}.json`, filters: [{ name: 'JSON session', extensions: ['json'] }] });
       if (result.canceled) return false;

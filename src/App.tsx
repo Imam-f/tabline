@@ -91,6 +91,21 @@ export default function App() {
     setPage('sessions');
     if (api) await action(async () => setSessions(await api.listSessions()));
   }
+  async function restoreSession(item: SessionSummary) {
+    if (!api) return;
+    await action(async () => {
+      const result = await api.restoreSession(item.id);
+      setState(result.state);
+      setArchived(null);
+      setDemo(null);
+      setSelectedId(null);
+      setPage('workspace');
+      setQuery('');
+      setFilter('all');
+      const issues = result.skipped + result.failed;
+      setToast(`Restored ${result.opened} ${result.opened === 1 ? 'tab' : 'tabs'}${issues ? `; ${issues} could not be restored` : ''}.`);
+    });
+  }
   function exploreDemo() { setDemo(makeDemo()); setArchived(null); setSelectedId('react'); setPage('workspace'); setShowLaunch(false); setQuery(''); setFilter('all'); }
 
   return <div className="app-shell">
@@ -118,7 +133,7 @@ export default function App() {
 
         {page === 'sessions' ? <section className="sessions-panel">
           <div className="section-heading"><h2>Saved sessions</h2><span>{sessions.length} sessions</span></div>
-          {sessions.length ? sessions.map((item) => <button className="saved-session" key={item.id} onClick={() => action(async () => { setArchived(await api!.loadSession(item.id)); setDemo(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); })}><span className="saved-session-icon"><FolderClock size={22}/></span><div><strong>{item.name}</strong><span>{date(item.startedAt)} · {clock(item.startedAt)} · {item.browser === 'helium' ? 'Helium' : 'Chrome'}</span></div><span>{item.tabCount} tabs</span><ArrowRight size={18}/></button>) : <div className="empty-state"><FolderClock size={35}/><h3>A fresh start.</h3><p>Your browsing sessions are saved automatically as you explore.<br/>Launch a browser to start your first one.</p><button className="button primary" onClick={() => setShowLaunch(true)}><Plus size={16}/>Start a session</button></div>}
+          {sessions.length ? sessions.map((item) => <div className="saved-session" key={item.id}><button className="saved-session-view" onClick={() => action(async () => { setArchived(await api!.loadSession(item.id)); setDemo(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); })}><span className="saved-session-icon"><FolderClock size={22}/></span><div><strong>{item.name}</strong><span>{date(item.startedAt)} · {clock(item.startedAt)} · {item.browser === 'helium' ? 'Helium' : 'Chrome'}</span></div><span>{item.tabCount} tabs</span><ArrowRight size={18}/></button><button className="button secondary restore-session" disabled={state.status !== 'idle' && state.status !== 'error'} onClick={() => restoreSession(item)}><RefreshCw size={14}/>Restore</button></div>) : <div className="empty-state"><FolderClock size={35}/><h3>A fresh start.</h3><p>Your browsing sessions are saved automatically as you explore.<br/>Launch a browser to start your first one.</p><button className="button primary" onClick={() => setShowLaunch(true)}><Plus size={16}/>Start a session</button></div>}
         </section> : <>
           <div className="stats-grid">
             <Stat icon={<Layers3 size={18}/>} label="Total tabs" value={session?.tabs.length || 0} detail="a trail of curiosity" color="purple"/>

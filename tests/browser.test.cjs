@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { WebSocketServer } = require('ws');
 const { CDP } = require('../electron/cdp.cjs');
-const { upsertTarget, validStartUrl, browserCandidates } = require('../electron/browser.cjs');
+const { upsertTarget, validStartUrl, browserCandidates, buildRestorePlan } = require('../electron/browser.cjs');
 const { BrowserController } = require('../electron/browser.cjs');
 
 test('tracks one lifetime per page, preserves opener and records actual navigations', () => {
@@ -15,6 +15,8 @@ test('tracks one lifetime per page, preserves opener and records actual navigati
   assert.equal(tab.openedAt, 100);
   assert.equal(tab.openerId, 'parent');
   assert.equal(tab.desktopId, 'unknown');
+  assert.equal(tab.tabIndex, null);
+  assert.equal(tab.openAtEnd, true);
   assert.deepEqual(tab.windowHistory, []);
   assert.equal(tab.groupId, null);
   upsertTarget(session, { type: 'page', targetId: 'child', url: 'https://example.com/next', title: 'Next' }, 200);
@@ -99,6 +101,34 @@ test('passes native window bounds and browser process to the desktop resolver on
   controller.desktopResolver = async (...args) => { received = args; return 'desktop-guid'; };
   assert.equal(await controller.getDesktopId('9', { left: 1, top: 2, width: 3, height: 4 }), 'desktop-guid');
   assert.deepEqual(received, ['9', { left: 1, top: 2, width: 3, height: 4 }, 4321]);
+});
+
+test('builds a restore plan from tabs that were open at shutdown in strip order', () => {
+  const session = { id: 'source', endedAt: 1000, tabs: [
+    { id: 'closed', url: 'https://closed.example', openAtEnd: false, extensionWindowId: 1, tabIndex: 0 },
+    { id: 'second', url: 'https://second.example', openAtEnd: true, extensionWindowId: 1, tabIndex: 2, pinned: false, openedAt: 20, openerId: 'first', groupId: 4 },
+    { id: 'first', url: 'https://first.example', openAtEnd: true, extensionWindowId: 1, tabIndex: 1, pinned: true, active: true, openedAt: 10, openerId: null, groupId: 4 },
+    { id: 'internal', url: 'chrome://settings', openAtEnd: true, extensionWindowId: 2, tabIndex: 0 },
+  ] };
+  const plan = buildRestorePlan(session);
+  assert.equal(plan.requested, 3);
+  assert.equal(plan.skipped, 1);
+  assert.equal(plan.windows.length, 1);
+  assert.deepEqual(plan.windows[0].tabs.map((tab) => tab.sourceId), ['first', 'second']);
+  assert.equal(plan.windows[0].tabs[1].openerSourceId, 'first');
+});
+
+test('tracks tab strip moves without duplicating unchanged order history', () => {
+  const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-order-')));
+  controller.session = { tabs: [{ id: 'target', url: 'https://example.com', title: 'Example', tabIndex: null, extensionWindowId: null, orderHistory: [], groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [] }] };
+  controller.onGroupInfo({ targetId: 'target', tabId: 8, windowId: 2, index: 0, pinned: true, active: true, groupId: -1 });
+  controller.onGroupInfo({ targetId: 'target', tabId: 8, windowId: 2, index: 0, pinned: true, active: true, groupId: -1 });
+  controller.onGroupInfo({ targetId: 'target', tabId: 8, windowId: 2, index: 3, pinned: true, active: false, groupId: -1 });
+  assert.equal(controller.session.tabs[0].tabIndex, 3);
+  assert.equal(controller.session.tabs[0].pinned, true);
+  assert.equal(controller.session.tabs[0].active, false);
+  assert.equal(controller.session.tabs[0].orderHistory.length, 2);
+  clearTimeout(controller.persistTimer);
 });
 
 test('localhost group bridge applies group color metadata to the matching tab', async () => {

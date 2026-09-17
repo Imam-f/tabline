@@ -125,3 +125,5 @@ main{padding:33px 34px 0;max-width:1800px;margin:auto}
 .tab-bar.has-group{background:color-mix(in srgb,var(--group-color) 15%,white);border-color:color-mix(in srgb,var(--group-color) 42%,white)}
 .tab-bar.has-group.is-closed{background:color-mix(in srgb,var(--group-color) 7%,white);border-color:color-mix(in srgb,var(--group-color) 20%,white)}
 .tab-bar.has-group.is-selected{background:color-mix(in srgb,var(--group-color) 24%,white);border-color:var(--group-color)}
+/* Saved sessions keep timeline viewing and browser restoration as separate actions. */
+.saved-session{padding:0;gap:10px}.saved-session-view{display:flex;align-items:center;gap:15px;min-width:0;flex:1;padding:20px 0;text-align:left}.saved-session-view>div{min-width:0;flex:1}.saved-session-view>span:not(:first-child){font-size:10px;color:#939cab}.saved-session-view>svg{color:#adb5c1}.restore-session{margin-right:2px;flex:none}

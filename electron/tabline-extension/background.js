@@ -1,4 +1,6 @@
-const bridgeUrl = 'http://127.0.0.1:17637/tab-groups';
+const bridgeOrigin = 'http://127.0.0.1:17637';
+const bridgeUrl = `${bridgeOrigin}/tab-groups`;
+let restoring = false;
 
 async function targetMap() {
   try {
@@ -22,7 +24,7 @@ async function sendSnapshot(tabIds = null) {
   const tabs = await queryTabs();
   const fallbackColors = ['blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'];
   const payload = tabs.filter((tab) => tab.id !== undefined && (!tabIds || tabIds.has(tab.id))).map((tab) => ({
-    targetId: targets.get(tab.id), tabId: tab.id, windowId: tab.windowId, url: tab.url, title: tab.title, groupId: tab.groupId ?? -1,
+    targetId: targets.get(tab.id), tabId: tab.id, windowId: tab.windowId, index: tab.index, pinned: !!tab.pinned, active: !!tab.active, url: tab.url, title: tab.title, groupId: tab.groupId ?? -1,
     groupTitle: tab.groupId > -1 ? `Group ${tab.groupId}` : null,
     groupColor: tab.groupId > -1 ? fallbackColors[tab.groupId % fallbackColors.length] : null,
     groupCollapsed: false,
@@ -33,6 +35,73 @@ async function sendSnapshot(tabIds = null) {
     }
   }
   fetch(bridgeUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabs: payload }) }).catch(() => {});
+}
+
+function callChrome(method, ...args) {
+  return new Promise((resolve, reject) => method(...args, (value) => chrome.runtime.lastError ? reject(new Error(chrome.runtime.lastError.message)) : resolve(value)));
+}
+
+async function executeRestore(plan) {
+  const created = new Map();
+  const errors = [];
+  let opened = 0;
+  for (let windowIndex = 0; windowIndex < plan.windows.length; windowIndex++) {
+    const sourceWindow = plan.windows[windowIndex];
+    let windowId;
+    let firstTab;
+    try {
+      if (windowIndex === 0) {
+        const current = await callChrome(chrome.windows.getCurrent.bind(chrome.windows), { populate: true });
+        windowId = current.id;
+        firstTab = current.tabs.find((tab) => tab.active) || current.tabs[0];
+        await callChrome(chrome.tabs.update.bind(chrome.tabs), firstTab.id, { url: sourceWindow.tabs[0].url, pinned: sourceWindow.tabs[0].pinned, active: false });
+      } else {
+        const browserWindow = await callChrome(chrome.windows.create.bind(chrome.windows), { url: sourceWindow.tabs[0].url, focused: false });
+        windowId = browserWindow.id;
+        firstTab = browserWindow.tabs[0];
+        if (sourceWindow.tabs[0].pinned) await callChrome(chrome.tabs.update.bind(chrome.tabs), firstTab.id, { pinned: true });
+      }
+      created.set(sourceWindow.tabs[0].sourceId, { id: firstTab.id, windowId });
+      opened++;
+    } catch (error) { errors.push(error.message); continue; }
+
+    for (const sourceTab of sourceWindow.tabs.slice(1)) {
+      try {
+        const opener = created.get(sourceTab.openerSourceId);
+        const tab = await callChrome(chrome.tabs.create.bind(chrome.tabs), { windowId, index: Math.min(sourceTab.index, 10000), url: sourceTab.url, pinned: sourceTab.pinned, active: false, ...(opener?.windowId === windowId ? { openerTabId: opener.id } : {}) });
+        created.set(sourceTab.sourceId, { id: tab.id, windowId });
+        opened++;
+      } catch (error) { errors.push(error.message); }
+    }
+
+    const grouped = new Map();
+    for (const sourceTab of sourceWindow.tabs) {
+      if (sourceTab.groupId === null || !created.has(sourceTab.sourceId)) continue;
+      const key = String(sourceTab.groupId);
+      if (!grouped.has(key)) grouped.set(key, { sourceTab, tabIds: [] });
+      grouped.get(key).tabIds.push(created.get(sourceTab.sourceId).id);
+    }
+    for (const { sourceTab, tabIds } of grouped.values()) {
+      try {
+        const groupId = await callChrome(chrome.tabs.group.bind(chrome.tabs), { tabIds, createProperties: { windowId } });
+        await callChrome(chrome.tabGroups.update.bind(chrome.tabGroups), groupId, { title: sourceTab.groupTitle || '', color: sourceTab.groupColor || 'grey', collapsed: sourceTab.groupCollapsed });
+      } catch (error) { errors.push(error.message); }
+    }
+    const active = sourceWindow.tabs.find((tab) => tab.active && created.has(tab.sourceId)) || sourceWindow.tabs.find((tab) => created.has(tab.sourceId));
+    if (active) await callChrome(chrome.tabs.update.bind(chrome.tabs), created.get(active.sourceId).id, { active: true }).catch((error) => errors.push(error.message));
+  }
+  await fetch(`${bridgeOrigin}/restore-result`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ opened, failed: errors.length, groupsRestored: true, warnings: errors }) });
+  sendSnapshot();
+}
+
+async function checkRestore() {
+  if (restoring) return;
+  try {
+    const response = await fetch(`${bridgeOrigin}/restore`);
+    if (response.status !== 200) return;
+    restoring = true;
+    await executeRestore(await response.json());
+  } catch {} finally { restoring = false; }
 }
 
 chrome.tabs.onCreated.addListener(() => sendSnapshot());
@@ -51,4 +120,5 @@ chrome.runtime.onStartup.addListener(() => sendSnapshot());
 chrome.alarms?.onAlarm?.addListener((alarm) => { if (alarm.name === 'tabline-group-refresh') sendSnapshot(); });
 chrome.alarms?.create?.('tabline-group-refresh', { periodInMinutes: 1 });
 sendSnapshot();
-setInterval(() => sendSnapshot(), 1000);
+checkRestore();
+setInterval(() => { sendSnapshot(); checkRestore(); }, 1000);

@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('tabline', {
   capture: (id) => ipcRenderer.invoke('tab:capture', id),
   listSessions: () => ipcRenderer.invoke('sessions:list'),
   loadSession: (id) => ipcRenderer.invoke('sessions:load', id),
+  restoreSession: (id, options) => ipcRenderer.invoke('sessions:restore', id, options),
   exportSession: (session) => ipcRenderer.invoke('session:export', session),
   onState: (callback) => {
     const listener = (_event, state) => callback(state);
