@@ -44,7 +44,7 @@ export interface AppState {
 export interface BrowserChoice { id: 'helium' | 'chrome'; name: string; path: string | null }
 export interface LaunchOptions { browser: 'helium' | 'chrome'; executable?: string; url: string; name: string }
 export interface SessionSummary { id: string; name: string; startedAt: number; endedAt: number | null; browser: string; tabCount: number }
-export interface RestoreResult { state: AppState; requested: number; opened: number; skipped: number; failed: number; groupsRestored: boolean; warnings: string[] }
+export interface RestoreResult { state: AppState; requested: number; opened: number; skipped: number; failed: number; desktopFailed: number; groupsRestored: boolean; warnings: string[] }
 export interface TablineAPI {
   getState(): Promise<AppState>;
   getBrowsers(): Promise<BrowserChoice[]>;

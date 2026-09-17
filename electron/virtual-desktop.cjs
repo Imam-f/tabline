@@ -10,22 +10,31 @@ class VirtualDesktopResolver {
     this.nextId = 1;
   }
 
-  resolve(processId, bounds) {
-    if (process.platform !== 'win32' || !processId || !Number.isFinite(bounds?.left) || !Number.isFinite(bounds?.top)) return Promise.resolve('unknown');
+  resolve(windowId, processId, bounds) {
+    return this.request('resolve', windowId, processId, bounds, null, 'unknown');
+  }
+
+  move(windowId, processId, bounds, desktopId) {
+    if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(desktopId || '')) return Promise.resolve(false);
+    return this.request('move', windowId, processId, bounds, desktopId, false);
+  }
+
+  request(action, windowId, processId, bounds, desktopId, fallback) {
+    if (process.platform !== 'win32' || !windowId || !processId || !Number.isFinite(bounds?.left) || !Number.isFinite(bounds?.top)) return Promise.resolve(fallback);
     this.start();
-    if (!this.child?.stdin.writable) return Promise.resolve('unknown');
+    if (!this.child?.stdin.writable) return Promise.resolve(fallback);
     const id = this.nextId++;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        resolve('unknown');
+        resolve(fallback);
       }, 10000);
-      this.pending.set(id, { resolve, timer });
-      this.child.stdin.write(`${JSON.stringify({ id, processId, bounds })}\n`, (error) => {
+      this.pending.set(id, { action, fallback, resolve, timer });
+      this.child.stdin.write(`${JSON.stringify({ id, action, windowId, processId, bounds, desktopId })}\n`, (error) => {
         if (!error || !this.pending.has(id)) return;
         clearTimeout(timer);
         this.pending.delete(id);
-        resolve('unknown');
+        resolve(fallback);
       });
     });
   }
@@ -44,7 +53,7 @@ class VirtualDesktopResolver {
       if (!request) return;
       clearTimeout(request.timer);
       this.pending.delete(message.id);
-      request.resolve(message.desktopId || 'unknown');
+      request.resolve(request.action === 'move' ? !!message.moved : message.desktopId || 'unknown');
     });
     child.once('error', () => this.onExit(child));
     child.once('exit', () => this.onExit(child));
@@ -53,9 +62,9 @@ class VirtualDesktopResolver {
   onExit(child) {
     if (this.child !== child) return;
     this.child = null;
-    for (const { resolve, timer } of this.pending.values()) {
+    for (const { fallback, resolve, timer } of this.pending.values()) {
       clearTimeout(timer);
-      resolve('unknown');
+      resolve(fallback);
     }
     this.pending.clear();
   }
@@ -64,9 +73,9 @@ class VirtualDesktopResolver {
     const child = this.child;
     this.child = null;
     child?.kill();
-    for (const { resolve, timer } of this.pending.values()) {
+    for (const { fallback, resolve, timer } of this.pending.values()) {
       clearTimeout(timer);
-      resolve('unknown');
+      resolve(fallback);
     }
     this.pending.clear();
   }

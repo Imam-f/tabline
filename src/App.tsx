@@ -103,7 +103,7 @@ export default function App() {
       setQuery('');
       setFilter('all');
       const issues = result.skipped + result.failed;
-      setToast(`Restored ${result.opened} ${result.opened === 1 ? 'tab' : 'tabs'}${issues ? `; ${issues} could not be restored` : ''}.`);
+      setToast(`Restored ${result.opened} ${result.opened === 1 ? 'tab' : 'tabs'}${issues ? `; ${issues} could not be restored` : ''}${result.desktopFailed ? '; virtual desktop placement was unavailable' : ''}.`);
     });
   }
   function exploreDemo() { setDemo(makeDemo()); setArchived(null); setSelectedId('react'); setPage('workspace'); setShowLaunch(false); setQuery(''); setFilter('all'); }

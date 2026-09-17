@@ -73,6 +73,8 @@ async function waitFor(predicate, label, timeout = 25000) {
     await waitFor(() => evaluate(`!!document.querySelector('.restore-session:not(:disabled)')`), 'restore action');
     await evaluate(`document.querySelector('.restore-session').click()`);
     await waitFor(() => evaluate(`!!document.querySelector('.live-badge') && document.querySelector('.tab-bar')?.title.includes('Desktop integration page')`), 'saved session restored into a new live browser', 40000);
+    await waitFor(() => evaluate(`document.querySelector('.toast')?.innerText.includes('Restored 1 tab')`), 'restore completion', 40000);
+    if (process.platform === 'win32') assert.equal(await evaluate(`document.querySelector('.toast')?.innerText.includes('virtual desktop placement was unavailable')`), false, 'restored window should return to its saved virtual desktop');
     await evaluate(`window.tabline.stop()`);
     await waitFor(() => evaluate(`!document.querySelector('.live-badge')`), 'restored session stopped');
     assert.deepEqual(rendererErrors, [], 'production renderer should have no uncaught errors');

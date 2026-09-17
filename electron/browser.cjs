@@ -383,6 +383,7 @@ class BrowserController extends EventEmitter {
 
   async stop() {
     if (this.status !== 'live') return;
+    await this.refreshAllTargetLocations().catch(() => {});
     this.status = 'stopping';
     this.closingBrowser = true;
     for (const tab of this.session.tabs) if (!tab.closedAt) tab.openAtEnd = true;
@@ -435,19 +436,26 @@ class BrowserController extends EventEmitter {
         let opened = 1;
         const failures = [];
         let anchorTargetId = this.session.tabs.find((tab) => !tab.closedAt)?.id;
+        const restoredWindows = [{ sourceWindowId: plan.windows[0].sourceWindowId, targetId: anchorTargetId }];
         for (let windowIndex = 0; windowIndex < plan.windows.length; windowIndex++) {
           const window = plan.windows[windowIndex];
           for (let tabIndex = windowIndex === 0 ? 1 : 0; tabIndex < window.tabs.length; tabIndex++) {
             try {
               if (tabIndex > 0 && anchorTargetId) await this.client.send('Target.activateTarget', { targetId: anchorTargetId });
               const created = await this.client.send('Target.createTarget', { url: window.tabs[tabIndex].url, newWindow: tabIndex === 0 && windowIndex > 0 });
-              if (tabIndex === 0) anchorTargetId = created.targetId;
+              if (tabIndex === 0) {
+                anchorTargetId = created.targetId;
+                restoredWindows.push({ sourceWindowId: window.sourceWindowId, targetId: anchorTargetId });
+              }
               opened++;
             } catch (error) { failures.push(error.message); }
           }
         }
-        result = { opened, failed: failures.length, groupsRestored: false, warnings: ['The companion extension was unavailable; tab pinning, exact order, groups, and opener links could not be restored.', ...failures] };
+        result = { opened, failed: failures.length, groupsRestored: false, windows: restoredWindows, warnings: ['The companion extension was unavailable; tab pinning, exact order, groups, and opener links could not be restored.', ...failures] };
       }
+      const desktopWarnings = await this.restoreVirtualDesktops(plan, result.windows || []);
+      result.warnings = [...(result.warnings || []), ...desktopWarnings];
+      result.desktopFailed = desktopWarnings.length;
       this.pendingRestore = null;
       this.publish();
       return { ...result, requested: plan.requested, skipped: plan.skipped, state: this.snapshot() };
@@ -456,6 +464,27 @@ class BrowserController extends EventEmitter {
       this.restoreResolve = null;
       throw error;
     }
+  }
+
+  async restoreVirtualDesktops(plan, restoredWindows) {
+    if (typeof this.desktopMover !== 'function') return [];
+    const warnings = [];
+    for (const restored of restoredWindows) {
+      const source = plan.windows.find((window) => window.sourceWindowId === String(restored.sourceWindowId));
+      if (!source || source.desktopId === 'unknown') continue;
+      let tab;
+      for (let attempt = 0; attempt < 50; attempt++) {
+        tab = restored.targetId
+          ? this.session?.tabs.find((item) => item.id === restored.targetId)
+          : this.session?.tabs.find((item) => item.extensionWindowId === restored.extensionWindowId);
+        if (tab?.windowBounds) break;
+        await delay(100);
+      }
+      if (tab) await this.refreshTargetLocation(tab);
+      const moved = tab?.windowBounds && await this.desktopMover(tab.windowId, tab.windowBounds, this.process?.pid, source.desktopId);
+      if (!moved) warnings.push(`Could not restore a browser window to virtual desktop ${source.desktopId}.`);
+    }
+    return warnings;
   }
 }
 

@@ -131,6 +131,18 @@ test('tracks tab strip moves without duplicating unchanged order history', () =>
   clearTimeout(controller.persistTimer);
 });
 
+test('moves correlated restored windows to their saved virtual desktops', async () => {
+  const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-desktop-restore-')));
+  const bounds = { left: 10, top: 20, width: 800, height: 600 };
+  controller.process = { pid: 123 };
+  controller.session = { tabs: [{ id: 'new-target', windowId: '9', windowBounds: bounds }] };
+  let received;
+  controller.desktopMover = async (...args) => { received = args; return true; };
+  const warnings = await controller.restoreVirtualDesktops({ windows: [{ sourceWindowId: 'old-window', desktopId: '11111111-1111-1111-1111-111111111111' }] }, [{ sourceWindowId: 'old-window', targetId: 'new-target' }]);
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(received, ['9', bounds, 123, '11111111-1111-1111-1111-111111111111']);
+});
+
 test('localhost group bridge applies group color metadata to the matching tab', async () => {
   const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-group-bridge-')));
   controller.session = { tabs: [{ id: 'target', windowId: '42', url: 'https://example.com', title: 'Example', groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [] }] };

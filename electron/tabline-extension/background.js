@@ -43,6 +43,7 @@ function callChrome(method, ...args) {
 
 async function executeRestore(plan) {
   const created = new Map();
+  const restoredWindows = [];
   const errors = [];
   let opened = 0;
   for (let windowIndex = 0; windowIndex < plan.windows.length; windowIndex++) {
@@ -62,6 +63,7 @@ async function executeRestore(plan) {
         if (sourceWindow.tabs[0].pinned) await callChrome(chrome.tabs.update.bind(chrome.tabs), firstTab.id, { pinned: true });
       }
       created.set(sourceWindow.tabs[0].sourceId, { id: firstTab.id, windowId });
+      restoredWindows.push({ sourceWindowId: sourceWindow.sourceWindowId, extensionWindowId: windowId });
       opened++;
     } catch (error) { errors.push(error.message); continue; }
 
@@ -90,7 +92,7 @@ async function executeRestore(plan) {
     const active = sourceWindow.tabs.find((tab) => tab.active && created.has(tab.sourceId)) || sourceWindow.tabs.find((tab) => created.has(tab.sourceId));
     if (active) await callChrome(chrome.tabs.update.bind(chrome.tabs), created.get(active.sourceId).id, { active: true }).catch((error) => errors.push(error.message));
   }
-  await fetch(`${bridgeOrigin}/restore-result`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ opened, failed: errors.length, groupsRestored: true, warnings: errors }) });
+  await fetch(`${bridgeOrigin}/restore-result`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ opened, failed: errors.length, groupsRestored: true, windows: restoredWindows, warnings: errors }) });
   sendSnapshot();
 }
 

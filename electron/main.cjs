@@ -20,7 +20,8 @@ else {
     controller = new BrowserController(path.join(app.getPath('userData'), 'browser-data'), extensionPath);
     if (process.platform === 'win32') {
       virtualDesktopResolver = new VirtualDesktopResolver();
-      controller.desktopResolver = (_windowId, bounds, processId) => virtualDesktopResolver.resolve(processId, bounds);
+      controller.desktopResolver = (windowId, bounds, processId) => virtualDesktopResolver.resolve(windowId, processId, bounds);
+      controller.desktopMover = (windowId, bounds, processId, desktopId) => virtualDesktopResolver.move(windowId, processId, bounds, desktopId);
     }
     controller.on('change', (state) => { if (window && !window.isDestroyed()) window.webContents.send('state:changed', state); });
     controller.on('storage-error', (message) => { if (window && !window.isDestroyed()) window.webContents.send('state:changed', { ...controller.snapshot(), error: `Could not save session: ${message}` }); });
