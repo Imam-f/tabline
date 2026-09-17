@@ -6,6 +6,15 @@ export interface BrowserTab {
   openedAt: number;
   closedAt: number | null;
   openerId: string | null;
+  windowId: string | null;
+  desktopId: string;
+  windowBounds?: { left: number; top: number; width: number; height: number; windowState?: string } | null;
+  windowHistory: Array<{ windowId: string; desktopId: string; at: number }>;
+  groupId: number | null;
+  groupTitle: string | null;
+  groupColor: string | null;
+  groupCollapsed: boolean;
+  groupHistory: Array<{ groupId: number | null; title: string | null; color: string | null; at: number }>;
   thumbnail: string | null;
   thumbnailAt: number | null;
   navigations: Navigation[];

@@ -24,7 +24,7 @@ export function makeDemo(): Session {
     id: 'demo', name: 'A little productive wandering', browser: 'helium', startedAt: start, endedAt: null,
     tabs: entries.map(([id, title, url, opened, closed, openerId, accent, dark]) => ({
       id, title, url, openedAt: start + opened * 60000, closedAt: closed === null ? null : start + closed * 60000,
-      openerId, thumbnail: demoThumbnail(id.startsWith('react') ? 'React' : id.charAt(0).toUpperCase() + id.slice(1), accent, dark),
+      openerId, windowId: id === 'vercel' ? '2' : '1', desktopId: 'Demo desktop', windowHistory: [{ windowId: id === 'vercel' ? '2' : '1', desktopId: 'Demo desktop', at: start + opened * 60000 }], groupId: ['react', 'react-learn'].includes(id) ? 1 : null, groupTitle: ['react', 'react-learn'].includes(id) ? 'Learning React' : null, groupColor: ['react', 'react-learn'].includes(id) ? 'cyan' : null, groupCollapsed: false, groupHistory: [], thumbnail: demoThumbnail(id.startsWith('react') ? 'React' : id.charAt(0).toUpperCase() + id.slice(1), accent, dark),
       thumbnailAt: Date.now() - 12000,
       navigations: [{ url, title, at: start + opened * 60000 }],
     })),

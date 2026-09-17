@@ -33,7 +33,10 @@ Installers are placed in `release/`. `npm run dist:dir` creates an unpacked desk
 - **Browser launcher** — Helium by default, with Chrome as an option and a custom executable picker. If only Chrome is installed, it is preselected.
 - **Live timeline** — one lane per tab, with its opening time, lifetime, and closing time. Zoom, search, and filter open, closed, or connected tabs.
 - **Opener arrows** — connect a new tab to its parent using Chromium’s `TargetInfo.openerId`.
-- **Thumbnails** — real JPEG snapshots after page changes and approximately every 20 seconds. Select a tab to view a larger preview or refresh it manually.
+- **Window grouping** — resolve each tab to its Chromium browser window with `Browser.getWindowForTarget` and group the timeline by window. Chromium’s DevTools Protocol does not expose virtual-desktop membership; those groups are labeled explicitly as unavailable rather than guessed.
+- **Window move history** — browser-window membership is polled independently every second, rather than only when a tab navigates or becomes active. Each detected move is timestamped in `windowHistory` and shown in the tab details panel.
+- **Tab groups** — the managed browser loads the bundled Tabline companion extension, which reports Chromium tab-group membership, group title, color, collapsed state, and changes over a localhost-only bridge. Group updates are recorded independently of page navigation.
+- **Thumbnails** — real JPEG snapshots after page changes and approximately every 60 seconds. Select a tab to view a larger preview or refresh it manually.
 - **Tab details** — page history, parent and child tabs, duration, and buttons to focus or close an open browser tab.
 - **Saved sessions** — automatically persist timelines, navigation history, and thumbnails locally. Reopen a session or export it as portable JSON.
 - **Demo mode** — explore an example timeline without launching a browser. The standalone web preview (`npm run dev:web`) uses the demo; browser launching requires Electron.
@@ -48,7 +51,9 @@ The Electron main process starts the selected Chromium-based browser with:
 --user-data-dir=<Tabline app data>/browser-data/profiles/<browser>
 ```
 
-It reads the browser’s `DevToolsActivePort` file, connects to its local DevTools WebSocket, and subscribes to `Target` discovery events. Screenshots use short-lived flattened target sessions and `Page.captureScreenshot`. **No companion extension is required.**
+It reads the browser’s `DevToolsActivePort` file, connects to its local DevTools WebSocket, and subscribes to `Target` discovery events. Screenshots use short-lived flattened target sessions and `Page.captureScreenshot`. The companion extension is loaded only into Tabline’s dedicated browser profile because Chromium’s DevTools Protocol has no tab-group API.
+
+Google Chrome builds can reject the `--load-extension` flag for security reasons. When that happens, window/timeline tracking still works, but Chrome will not provide native tab-group metadata. Use Helium or a Chromium build that permits unpacked extensions for automatic group colors, or manually load `electron/tabline-extension/` into the managed profile from `chrome://extensions` with Developer mode enabled. If the browser does not expose a stable target ID, Tabline ignores ambiguous duplicate-URL matches rather than assigning a group to the wrong tab. Fallback colors are deterministic by group ID, not the browser’s native color.
 
 Tabline uses a dedicated, persistent browser profile per browser. This is required by current Chrome remote-debugging restrictions and keeps the tracked browser separate from your normal profile. Bookmarks, logins, and browser state within this profile persist between sessions. Only one tracked browser session runs at a time. Ending the session (or quitting the desktop app) closes the managed browser and saves its timeline.
 

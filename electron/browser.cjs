@@ -4,6 +4,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
+const http = require('node:http');
 const { CDP } = require('./cdp.cjs');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,10 +43,12 @@ function upsertTarget(session, info, now = Date.now()) {
   if (info.type !== 'page') return null;
   let tab = session.tabs.find((item) => item.id === info.targetId);
   if (!tab) {
-    tab = { id: info.targetId, title: info.title || 'New tab', url: info.url || 'about:blank', openedAt: now, closedAt: null, openerId: info.openerId || null, thumbnail: null, thumbnailAt: null, navigations: [] };
+    tab = { id: info.targetId, title: info.title || 'New tab', url: info.url || 'about:blank', openedAt: now, closedAt: null, openerId: info.openerId || null, windowId: info.windowId || null, desktopId: info.desktopId || 'unknown', windowHistory: [], groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [], thumbnail: null, thumbnailAt: null, navigations: [] };
     session.tabs.push(tab);
   }
   if (info.openerId) tab.openerId = info.openerId;
+  if (info.windowId) tab.windowId = info.windowId;
+  if (info.desktopId) tab.desktopId = info.desktopId;
   if (info.url && (tab.navigations.length === 0 || tab.url !== info.url)) {
     tab.navigations.push({ url: info.url, title: info.title || info.url, at: now });
   } else if (info.title && tab.navigations.length) {
@@ -57,7 +60,7 @@ function upsertTarget(session, info, now = Date.now()) {
 }
 
 class BrowserController extends EventEmitter {
-  constructor(dataDir) {
+  constructor(dataDir, extensionPath = path.join(__dirname, 'tabline-extension')) {
     super();
     this.dataDir = dataDir;
     this.status = 'idle';
@@ -69,6 +72,9 @@ class BrowserController extends EventEmitter {
     this.debugPort = null;
     this.lastError = null;
     this.persistTimer = null;
+    this.extensionPath = extensionPath;
+    this.groupBridge = null;
+    this.groupToken = null;
     fs.mkdirSync(path.join(dataDir, 'sessions'), { recursive: true });
   }
 
@@ -99,6 +105,7 @@ class BrowserController extends EventEmitter {
   loadSession(id) {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid session ID');
     const session = JSON.parse(fs.readFileSync(path.join(this.dataDir, 'sessions', `${id}.json`), 'utf8'));
+    session.tabs.forEach((tab) => { tab.windowHistory ||= []; tab.desktopId ||= 'unknown'; tab.windowId ||= null; tab.groupId ??= null; tab.groupTitle ??= null; tab.groupColor ??= null; tab.groupCollapsed ||= false; tab.groupHistory ||= []; });
     // A session interrupted by an app/process crash has no explicit end time.
     if (!session.endedAt && session.id !== this.session?.id) {
       session.endedAt = Math.max(session.startedAt, ...session.tabs.flatMap((tab) => [tab.openedAt, tab.closedAt || 0, tab.thumbnailAt || 0, ...tab.navigations.map((nav) => nav.at)]));
@@ -118,16 +125,23 @@ class BrowserController extends EventEmitter {
     this.publish();
     const profile = path.join(this.dataDir, 'profiles', browser);
     fs.mkdirSync(profile, { recursive: true });
+    const runtimeExtensionPath = path.join(profile, 'tabline-companion');
+    fs.rmSync(runtimeExtensionPath, { recursive: true, force: true });
+    fs.cpSync(this.extensionPath, runtimeExtensionPath, { recursive: true });
     const portFile = path.join(profile, 'DevToolsActivePort');
     try { fs.unlinkSync(portFile); } catch {}
     let launchError;
     let exited = false;
     try {
+      await this.startGroupBridge();
       const child = spawn(executable, [
-        '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1',
+        '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', '--enable-automation',
         `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check',
-        '--disable-background-mode', '--new-window', url,
-      ], { stdio: 'ignore', windowsHide: false });
+        '--disable-background-mode', '--new-window',
+        '--enable-extensions', `--load-extension=${runtimeExtensionPath}`,
+        ...(process.env.TABLINE_BROWSER_LOG ? ['--enable-logging=stderr', '--vmodule=extensions*=2'] : []),
+        url,
+      ], { stdio: process.env.TABLINE_BROWSER_LOG ? 'inherit' : 'ignore', windowsHide: false });
       this.process = child;
       child.once('error', (error) => { launchError = error; });
       child.once('exit', () => { exited = true; if (this.process === child && (this.status === 'live' || this.status === 'stopping')) this.finish(); });
@@ -162,7 +176,9 @@ class BrowserController extends EventEmitter {
       await this.client.send('Target.setDiscoverTargets', { discover: true });
       const { targetInfos } = await this.client.send('Target.getTargets');
       targetInfos.forEach((info) => this.onTarget(info));
-      this.interval = setInterval(() => this.captureAll(), 20000);
+      this.interval = setInterval(() => this.captureAll(), 60000);
+      this.locationInterval = setInterval(() => this.refreshAllTargetLocations().catch(() => {}), 1000);
+      await this.refreshAllTargetLocations();
       this.publish();
       return this.snapshot();
     } catch (error) {
@@ -182,6 +198,7 @@ class BrowserController extends EventEmitter {
     const shouldCapture = !previous || previous.url !== info.url || previous.title !== info.title;
     const tab = upsertTarget(this.session, info);
     if (!tab) return;
+    this.refreshTargetLocation(tab).then(() => this.publish()).catch(() => {});
     this.publish();
     if (shouldCapture) {
       clearTimeout(this.captureTimers.get(tab.id));
@@ -190,6 +207,84 @@ class BrowserController extends EventEmitter {
         this.capture(tab.id).catch(() => {});
       }, 1600));
     }
+  }
+
+  async startGroupBridge() {
+    this.groupToken = randomUUID();
+    this.groupBridge = http.createServer((request, response) => {
+      if (request.method === 'OPTIONS' && request.url === '/tab-groups') {
+        response.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
+        response.end();
+        return;
+      }
+      if (request.method !== 'POST' || request.url !== '/tab-groups') {
+        response.writeHead(404); response.end(); return;
+      }
+      let body = '';
+      request.on('data', (chunk) => { body += chunk; if (body.length > 1024 * 1024) request.destroy(); });
+      request.on('end', () => {
+        try {
+          const message = JSON.parse(body);
+          for (const groupTab of Array.isArray(message.tabs) ? message.tabs : []) this.onGroupInfo(groupTab);
+          response.writeHead(204, { 'Access-Control-Allow-Origin': '*' }); response.end();
+        } catch { response.writeHead(400); response.end(); }
+      });
+    });
+    await new Promise((resolve, reject) => { this.groupBridge.once('error', reject); this.groupBridge.listen(17637, '127.0.0.1', resolve); });
+  }
+
+  onGroupInfo(info) {
+    const tabs = this.session?.tabs || [];
+    const unique = (candidates) => candidates.length === 1 ? candidates[0] : null;
+    const tab = tabs.find((item) => item.id === info.targetId)
+      || unique(tabs.filter((item) => item.windowId === String(info.windowId) && item.url === info.url && item.title === info.title))
+      || unique(tabs.filter((item) => item.windowId === String(info.windowId) && item.url === info.url))
+      || unique(tabs.filter((item) => item.url === info.url && item.title === info.title))
+      || unique(tabs.filter((item) => item.url === info.url));
+    if (!tab) return;
+    const groupId = Number.isInteger(info.groupId) && info.groupId >= 0 ? info.groupId : null;
+    const changed = tab.groupId !== groupId || tab.groupTitle !== (info.groupTitle || null) || tab.groupColor !== (info.groupColor || null) || tab.groupCollapsed !== (info.groupCollapsed || false);
+    tab.groupId = groupId;
+    tab.groupTitle = groupId === null ? null : info.groupTitle || null;
+    tab.groupColor = groupId === null ? null : info.groupColor || null;
+    tab.groupCollapsed = groupId === null ? false : !!info.groupCollapsed;
+    if (!tab.groupHistory) tab.groupHistory = [];
+    if (changed) {
+      tab.groupHistory.push({ groupId, title: tab.groupTitle, color: tab.groupColor, at: Date.now() });
+    }
+    this.publish();
+  }
+
+  async refreshTargetLocation(tab) {
+    if (!this.client || !tab || this.status !== 'live') return;
+    try {
+      const location = await this.client.send('Browser.getWindowForTarget', { targetId: tab.id });
+      const windowId = String(location.windowId);
+      const moved = tab.windowId && tab.windowId !== windowId;
+      tab.windowId = windowId;
+      tab.windowBounds = location.bounds || null;
+      tab.desktopId = await this.getDesktopId(tab.windowId);
+      if (!tab.windowHistory) tab.windowHistory = [];
+      const last = tab.windowHistory.at(-1);
+      if (!last || last.windowId !== tab.windowId || last.desktopId !== tab.desktopId) {
+        const at = Date.now();
+        tab.windowHistory.push({ windowId: tab.windowId, desktopId: tab.desktopId, at });
+        if (moved) this.emit('tab-moved', { tabId: tab.id, windowId: tab.windowId, at });
+      }
+    } catch {}
+  }
+
+  async refreshAllTargetLocations() {
+    if (this.status !== 'live' || !this.session) return;
+    await Promise.all(this.session.tabs.filter((tab) => !tab.closedAt).map((tab) => this.refreshTargetLocation(tab)));
+    this.publish();
+  }
+
+  async getDesktopId(windowId) {
+    if (process.platform === 'win32' && typeof this.desktopResolver === 'function') {
+      try { return (await this.desktopResolver(windowId)) || 'unknown'; } catch {}
+    }
+    return 'unknown';
   }
 
   async capture(id) {
@@ -248,6 +343,7 @@ class BrowserController extends EventEmitter {
 
   finish() {
     clearInterval(this.interval);
+    clearInterval(this.locationInterval);
     for (const timer of this.captureTimers.values()) clearTimeout(timer);
     this.captureTimers.clear();
     if (this.session && !this.session.endedAt) {
@@ -258,6 +354,9 @@ class BrowserController extends EventEmitter {
     this.client?.removeAllListeners('disconnect');
     this.client?.close();
     this.client = null;
+    this.groupBridge?.close();
+    this.groupBridge = null;
+    this.groupToken = null;
     this.process = null;
     this.debugPort = null;
     if (this.status !== 'error') this.status = 'idle';

@@ -12,7 +12,13 @@ if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
   app.whenReady().then(() => {
-    controller = new BrowserController(path.join(app.getPath('userData'), 'browser-data'));
+    const extensionPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'app.asar.unpacked', 'electron', 'tabline-extension')
+      : path.join(__dirname, 'tabline-extension');
+    controller = new BrowserController(path.join(app.getPath('userData'), 'browser-data'), extensionPath);
+    // CDP exposes browser windows, but not virtual desktops. Keep this hook
+    // injectable for a future native Windows virtual-desktop resolver.
+    controller.desktopResolver = async () => 'unknown';
     controller.on('change', (state) => { if (window && !window.isDestroyed()) window.webContents.send('state:changed', state); });
     controller.on('storage-error', (message) => { if (window && !window.isDestroyed()) window.webContents.send('state:changed', { ...controller.snapshot(), error: `Could not save session: ${message}` }); });
     ipcMain.handle('state:get', () => controller.snapshot());

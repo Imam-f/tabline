@@ -1,6 +1,6 @@
 {
   "name": "tabline",
-  "version": "1.0.0",
+  "version": "0.1.1",
   "private": true,
   "description": "A local-first browser timeline for Helium and Chrome",
   "main": "electron/main.cjs",
@@ -38,6 +38,7 @@
     "appId": "local.tabline.app",
     "productName": "Tabline",
     "files": ["dist/**/*", "electron/**/*", "package.json"],
+    "asarUnpack": ["electron/tabline-extension/**/*"],
     "directories": { "output": "release" },
     "win": { "target": "nsis" },
     "mac": { "target": "dmg", "category": "public.app-category.developer-tools" },

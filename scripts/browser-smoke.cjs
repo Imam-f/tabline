@@ -9,7 +9,7 @@ const { BrowserController, detectBrowsers } = require('../electron/browser.cjs')
 const waitFor = async (predicate, label, timeout = 20000) => {
   const start = Date.now();
   while (Date.now() - start < timeout) {
-    const result = predicate();
+    const result = await predicate();
     if (result) return result;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -33,11 +33,32 @@ const waitFor = async (predicate, label, timeout = 20000) => {
   try {
     await controller.launch({ browser: browser?.id || 'chrome', executable, name: 'Integration test', url: base });
     assert.equal(controller.status, 'live');
+    let companion = null;
+    try { companion = await waitFor(async () => {
+      const targets = (await controller.client.send('Target.getTargets')).targetInfos.filter((target) => target.type === 'service_worker' && target.url.startsWith('chrome-extension://'));
+      for (const target of targets) {
+        const { sessionId } = await controller.client.send('Target.attachToTarget', { targetId: target.targetId, flatten: true });
+        const result = await controller.client.send('Runtime.evaluate', { expression: 'chrome.runtime.getManifest().name', returnByValue: true }, sessionId).catch(() => null);
+        await controller.client.send('Target.detachFromTarget', { sessionId }).catch(() => {});
+        if (result?.result?.result?.value === 'Tabline companion') return target;
+      }
+      return null;
+    }, 'Tabline companion extension'); } catch (error) {
+      if (process.env.TABLINE_REQUIRE_COMPANION === '1') throw error;
+      console.warn('SKIP: this branded Chrome build rejected --load-extension; tab-group metadata requires Helium/Chromium or a manually installed companion.');
+    }
+    if (companion) assert.ok(companion.url.startsWith('chrome-extension://'), 'Tabline companion extension should be installed in the managed browser');
     const parent = await waitFor(() => controller.session.tabs.find((tab) => tab.title === 'Parent tab'), 'initial tab');
+    await waitFor(() => parent.windowId, 'initial browser window ID');
     const { sessionId } = await controller.client.send('Target.attachToTarget', { targetId: parent.id, flatten: true });
     await controller.client.send('Runtime.evaluate', { expression: `window.open('${base}/child', '_blank')`, userGesture: true }, sessionId);
     const child = await waitFor(() => controller.session.tabs.find((tab) => tab.title === 'Child tab'), 'child tab');
     assert.equal(child.openerId, parent.id, 'child tab should retain its opener');
+    assert.ok(child.windowId, 'child tab should retain a browser window ID');
+    const secondWindow = await controller.client.send('Target.createTarget', { url: `${base}/next`, newWindow: true });
+    const separateWindowTab = await waitFor(() => controller.session.tabs.find((tab) => tab.id === secondWindow.targetId && tab.windowId), 'second browser window');
+    assert.notEqual(separateWindowTab.windowId, parent.windowId, 'separate browser windows should produce separate timeline groups');
+    assert.ok(parent.windowHistory.length >= 1, 'window assignment should be recorded without page activity');
     await controller.capture(child.id);
     assert.ok(child.thumbnail?.startsWith('data:image/jpeg;base64,'), 'captures real tab thumbnail');
     assert.ok(child.thumbnail.length > 1000, 'thumbnail has image content');
@@ -46,6 +67,7 @@ const waitFor = async (predicate, label, timeout = 20000) => {
     assert.ok(parent.navigations.length >= 2, 'navigation history should grow');
     await controller.focusTab(parent.id);
     await controller.closeTab(child.id);
+    await controller.closeTab(separateWindowTab.id);
     await waitFor(() => child.closedAt, 'closed-tab timestamp');
     assert.ok(child.closedAt >= child.openedAt);
     await assert.rejects(controller.focusTab(child.id), /no longer open/);

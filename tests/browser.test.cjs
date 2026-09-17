@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { WebSocketServer } = require('ws');
 const { CDP } = require('../electron/cdp.cjs');
 const { upsertTarget, validStartUrl, browserCandidates } = require('../electron/browser.cjs');
+const { BrowserController } = require('../electron/browser.cjs');
 
 test('tracks one lifetime per page, preserves opener and records actual navigations', () => {
   const session = { tabs: [] };
@@ -13,6 +14,9 @@ test('tracks one lifetime per page, preserves opener and records actual navigati
   assert.equal(tab.navigations[0].title, 'Example');
   assert.equal(tab.openedAt, 100);
   assert.equal(tab.openerId, 'parent');
+  assert.equal(tab.desktopId, 'unknown');
+  assert.deepEqual(tab.windowHistory, []);
+  assert.equal(tab.groupId, null);
   upsertTarget(session, { type: 'page', targetId: 'child', url: 'https://example.com/next', title: 'Next' }, 200);
   assert.equal(session.tabs.length, 1);
   assert.equal(tab.navigations.length, 2);
@@ -71,4 +75,57 @@ test('CDP correlates out-of-order responses and rejects pending work on disconne
     for (const connection of server.clients) connection.terminate();
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test('merges tab-group events without requiring navigation activity', () => {
+  const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-group-')));
+  controller.session = { tabs: [{ id: 'target', groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [] }] };
+  controller.onGroupInfo({ targetId: 'target', groupId: 7, groupTitle: 'Research', groupColor: 'blue', groupCollapsed: false });
+  assert.equal(controller.session.tabs[0].groupTitle, 'Research');
+  assert.equal(controller.session.tabs[0].groupHistory.length, 1);
+  controller.onGroupInfo({ targetId: 'target', groupId: 7, groupTitle: 'Research', groupColor: 'blue', groupCollapsed: false });
+  assert.equal(controller.session.tabs[0].groupHistory.length, 1);
+  controller.onGroupInfo({ targetId: 'target', groupId: -1 });
+  assert.equal(controller.session.tabs[0].groupId, null);
+  assert.equal(controller.session.tabs[0].groupHistory.length, 2);
+  clearTimeout(controller.persistTimer);
+});
+
+test('localhost group bridge applies group color metadata to the matching tab', async () => {
+  const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-group-bridge-')));
+  controller.session = { tabs: [{ id: 'target', windowId: '42', url: 'https://example.com', title: 'Example', groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [] }] };
+  await controller.startGroupBridge();
+  try {
+    const response = await fetch('http://127.0.0.1:17637/tab-groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabs: [{ targetId: 'target', windowId: 42, url: 'https://example.com', title: 'Example', groupId: 9, groupTitle: 'Research', groupColor: 'purple', groupCollapsed: false }] }) });
+    assert.equal(response.status, 204);
+    assert.equal(controller.session.tabs[0].groupId, 9);
+    assert.equal(controller.session.tabs[0].groupTitle, 'Research');
+    assert.equal(controller.session.tabs[0].groupColor, 'purple');
+    assert.equal(controller.session.tabs[0].groupHistory.length, 1);
+  } finally {
+    controller.groupBridge.close();
+    clearTimeout(controller.persistTimer);
+  }
+});
+
+test('group updates catch an ungrouped tab moved into a group without a target ID', () => {
+  const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-group-move-')));
+  controller.session = { tabs: [{ id: 'target', windowId: '42', url: 'https://example.com', title: 'Example', groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [] }] };
+  controller.onGroupInfo({ windowId: 42, url: 'https://example.com', title: 'Example', groupId: 12, groupTitle: 'Research', groupColor: 'cyan', groupCollapsed: false });
+  assert.equal(controller.session.tabs[0].groupId, 12);
+  assert.equal(controller.session.tabs[0].groupColor, 'cyan');
+  assert.equal(controller.session.tabs[0].groupHistory.length, 1);
+  clearTimeout(controller.persistTimer);
+});
+
+test('ambiguous group updates are ignored instead of coloring the wrong duplicate tab', () => {
+  const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-group-ambiguous-')));
+  controller.session = { tabs: [
+    { id: 'one', windowId: '42', url: 'https://example.com', title: 'Example', groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [] },
+    { id: 'two', windowId: '42', url: 'https://example.com', title: 'Example', groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [] },
+  ] };
+  controller.onGroupInfo({ windowId: 42, url: 'https://example.com', title: 'Example', groupId: 12, groupTitle: 'Research', groupColor: 'cyan', groupCollapsed: false });
+  assert.equal(controller.session.tabs[0].groupId, null);
+  assert.equal(controller.session.tabs[1].groupId, null);
+  clearTimeout(controller.persistTimer);
 });
