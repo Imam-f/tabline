@@ -102,3 +102,52 @@ main{padding:33px 34px 0;max-width:1800px;margin:auto}
 .tab-bar.has-group.is-selected{background:color-mix(in srgb,var(--group-color) 24%,white);border-color:var(--group-color)}
 /* Saved sessions keep timeline viewing and browser restoration as separate actions. */
 .saved-session{padding:0;gap:10px}.saved-session-view{display:flex;align-items:center;gap:15px;min-width:0;flex:1;padding:20px 0;text-align:left}.saved-session-view>div{min-width:0;flex:1}.saved-session-view>span:not(:first-child){font-size:10px;color:#939cab}.saved-session-view>svg{color:#adb5c1}.restore-session{margin-right:2px;flex:none}
+/* Window / virtual-desktop groups now stack in one canvas, separated by collapsible headers. */
+.timeline-separator{height:34px;display:flex;align-items:center;gap:7px;padding:0 12px;background:#fbfcfe;border-bottom:1px solid #eef1f5;color:#8d96a4;font-size:8px;width:100%;text-align:left;position:relative;z-index:3}
+.timeline-separator:hover{background:#f3f7fc;color:#5f6a7d}
+.timeline-separator strong{font-size:8px;font-weight:550;color:#687486}
+.timeline-separator .separator-chevron{margin-left:4px;color:#a7adb7;display:grid;place-items:center}
+.timeline-separator:hover .separator-chevron{color:#77829a}
+/* Saved-session folders. */
+.sessions-groups{display:flex;flex-direction:column;margin-bottom:28px}
+.section-heading-actions{display:flex;align-items:center;gap:14px}
+.section-count{font-size:8.5px;color:#9aa3b1;letter-spacing:.3px;white-space:nowrap}
+.folder-new{min-height:30px;padding:7px 11px;font-size:9px}
+.folder-edit-inline{padding:0}
+.folder-edit-inline input{flex:none;width:180px}
+.folder-section{position:relative}
+.folder-separator{height:1px;background:var(--border)}
+.folder-header{display:flex;align-items:center;height:42px;gap:4px}
+.folder-toggle{display:flex;align-items:center;gap:8px;flex:1;min-width:0;padding:0;color:#6b7484;text-align:left}
+.folder-toggle>svg:first-child{color:#a3abb8}
+.folder-toggle>svg{color:#9aa987}
+.folder-toggle>strong{font-size:11px;font-weight:550;color:#525d70;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.folder-count{font-size:9px;color:#9aa3b1;background:#f1f3f7;border-radius:9px;padding:2px 8px}
+.folder-actions{display:flex;gap:2px;opacity:0;transition:opacity .15s}
+.folder-header:hover .folder-actions{opacity:1}
+.folder-actions button{width:26px;height:26px;display:grid;place-items:center;color:#9aa3b1;border-radius:5px}
+.folder-actions button:hover{background:#eef1f6;color:#566072}
+.folder-edit{display:flex;align-items:center;gap:7px;padding:0 0 10px}
+.folder-edit input{height:32px;flex:1;padding:0 11px;border:1px solid #dfe4ec;border-radius:6px;color:#667286;font-size:11px;background:#fff}
+.folder-edit input:focus{outline:0;border-color:#8196f4}
+.folder-edit button{width:28px;height:28px;display:grid;place-items:center;border-radius:5px;color:#8c95a4;border:1px solid #e6e9ee;background:#fff}
+.folder-edit button:hover{background:#f3f5f9}
+.folder-empty{color:#a6afbd;font-size:10px;padding:12px 0 16px 30px}
+.saved-session-folder{display:flex;align-items:center;gap:7px;color:#9aa3b1;flex:none}
+.saved-session-folder .select-wrap select{width:128px;font-size:9px;height:28px;padding-right:24px}
+/* Folder drag & drop. */
+.folder-toggle[draggable="true"],.saved-session-view[draggable="true"]{cursor:grab}
+.folder-toggle[draggable="true"]:active,.saved-session-view[draggable="true"]:active{cursor:grabbing}
+.folder-section.dragging,.saved-session.dragging{opacity:.4}
+.folder-section.drop-target{background:#f0f6ff;box-shadow:inset 0 0 0 1.5px #8196f4}
+.sessions-groups.drop-root{box-shadow:inset 0 0 0 1.5px #8196f4;border-radius:6px}
+/* Session rename / delete. */
+.saved-session .saved-session-actions{display:flex;gap:2px;flex:none;opacity:0;transition:opacity .15s}
+.saved-session:hover .saved-session-actions{opacity:1}
+.saved-session-actions button{width:26px;height:26px;display:grid;place-items:center;color:#9aa3b1;border-radius:5px}
+.saved-session-actions button:hover{background:#eef1f6;color:#566072}
+.session-rename{display:flex;align-items:center;gap:7px;flex:1;min-width:0;padding:8px 0}
+.session-rename input{height:32px;flex:1;min-width:0;padding:0 11px;border:1px solid #dfe4ec;border-radius:6px;color:#667286;font-size:11px;background:#fff}
+.session-rename input:focus{outline:0;border-color:#8196f4}
+.session-rename button{width:28px;height:28px;display:grid;place-items:center;border-radius:5px;color:#8c95a4;border:1px solid #e6e9ee;background:#fff;flex:none}
+.session-rename button:hover{background:#f3f5f9}

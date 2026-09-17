@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Check, ChevronDown,
   ChevronLeft, ChevronRight, CircleHelp, Clock3, ExternalLink, FolderClock, FolderOpen,
-  GitBranch, Globe2, Image, Layers3, LayoutList, Maximize2, Monitor,
-  Plus, Radio, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Square, X, Minus,
+  FolderPlus, GitBranch, Globe2, Image, Layers3, LayoutList, Maximize2, Monitor,
+  Pencil, Plus, Radio, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, X, Minus,
 } from 'lucide-react';
-import type { AppState, BrowserChoice, BrowserTab, Session, SessionSummary } from './types';
+import type { AppState, BrowserChoice, BrowserTab, Folder, Session, SessionSummary } from './types';
 import { makeDemo } from './demo';
 
 const api = window.tabline;
@@ -48,6 +48,17 @@ export default function App() {
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [creatingSubfolder, setCreatingSubfolder] = useState<string | null>(null);
+  const [folderName, setFolderName] = useState('');
+  const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
+  const [dragging, setDragging] = useState<{ type: 'folder' | 'session'; id: string } | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [sessionName, setSessionName] = useState('');
+  const [deletingSession, setDeletingSession] = useState<SessionSummary | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const session = demo || archived || state.session;
   const isLive = !demo && !archived && state.status === 'live';
@@ -89,7 +100,13 @@ export default function App() {
   }
   async function openSessions() {
     setPage('sessions');
-    if (api) await action(async () => setSessions(await api.listSessions()));
+    if (api) await action(refreshSessions);
+  }
+  async function refreshSessions() {
+    if (!api) return;
+    const [nextSessions, nextFolders] = await Promise.all([api.listSessions(), api.listFolders()]);
+    setSessions(nextSessions);
+    setFolders(nextFolders);
   }
   async function restoreSession(item: SessionSummary) {
     if (!api) return;
@@ -107,6 +124,102 @@ export default function App() {
     });
   }
   function exploreDemo() { setDemo(makeDemo()); setArchived(null); setSelectedId('react'); setPage('workspace'); setShowLaunch(false); setQuery(''); setFilter('all'); }
+  function toggleFolder(id: string) { setCollapsedFolders((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
+  function startCreateFolder() { setCreatingFolder(true); setCreatingSubfolder(null); setFolderName(''); setEditingFolderId(null); }
+  function startCreateSubfolder(parentId: string) { setCreatingSubfolder(parentId); setCreatingFolder(false); setFolderName(''); setEditingFolderId(null); }
+  function cancelCreateFolder() { setCreatingFolder(false); setCreatingSubfolder(null); setFolderName(''); }
+  async function createFolder() {
+    if (!api) return;
+    const name = folderName.trim();
+    if (!name) return;
+    const parentId = creatingSubfolder;
+    await action(async () => { await api.createFolder(name, parentId); setFolderName(''); setCreatingFolder(false); setCreatingSubfolder(null); await refreshSessions(); }, 'Folder created.');
+  }
+  function startRenameFolder(folder: Folder) { setEditingFolderId(folder.id); setFolderName(folder.name); setCreatingFolder(false); setCreatingSubfolder(null); }
+  function cancelEditFolder() { setEditingFolderId(null); setFolderName(''); }
+  async function renameFolder() {
+    if (!api || !editingFolderId) return;
+    const id = editingFolderId;
+    const name = folderName.trim();
+    if (!name) return;
+    await action(async () => { await api.renameFolder(id, name); setEditingFolderId(null); setFolderName(''); await refreshSessions(); }, 'Folder renamed.');
+  }
+  async function deleteFolder(id: string) {
+    if (!api) return;
+    await action(async () => { await api.deleteFolder(id); if (editingFolderId === id) { setEditingFolderId(null); setFolderName(''); } await refreshSessions(); }, 'Folder deleted.');
+  }
+  async function moveSession(sessionId: string, folderId: string | null) {
+    if (!api) return;
+    await action(async () => { await api.setSessionFolder(sessionId, folderId); await refreshSessions(); });
+  }
+  function beginDrag(type: 'folder' | 'session', id: string, event: React.DragEvent) {
+    setDragging({ type, id });
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', id);
+  }
+  function endDrag() { setDragging(null); setDropTarget(null); }
+  async function dropOnFolder(folderId: string) {
+    const drag = dragging;
+    endDrag();
+    if (!api || !drag) return;
+    if (drag.type === 'folder' && drag.id !== folderId) await action(async () => { await api.setFolderParent(drag.id, folderId); await refreshSessions(); });
+    else if (drag.type === 'session') await action(async () => { await api.setSessionFolder(drag.id, folderId); await refreshSessions(); });
+  }
+  async function dropOnRoot() {
+    const drag = dragging;
+    endDrag();
+    if (!api || !drag) return;
+    if (drag.type === 'folder') await action(async () => { await api.setFolderParent(drag.id, null); await refreshSessions(); });
+    else if (drag.type === 'session') await action(async () => { await api.setSessionFolder(drag.id, null); await refreshSessions(); });
+  }
+  function startRenameSession(item: SessionSummary) { setEditingSessionId(item.id); setSessionName(item.name); }
+  function cancelRenameSession() { setEditingSessionId(null); setSessionName(''); }
+  async function renameSession() {
+    if (!api || !editingSessionId) return;
+    const id = editingSessionId;
+    const name = sessionName.trim();
+    if (!name) return;
+    await action(async () => { await api.renameSession(id, name); setEditingSessionId(null); setSessionName(''); await refreshSessions(); }, 'Session renamed.');
+  }
+  async function deleteSession() {
+    if (!api || !deletingSession) return;
+    const id = deletingSession.id;
+    await action(async () => { await api.deleteSession(id); setDeletingSession(null); await refreshSessions(); }, 'Session deleted.');
+  }
+  const folderChildren = useMemo(() => {
+    const map = new Map<string | null, Folder[]>();
+    for (const folder of folders) {
+      const key = folder.parentId || null;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(folder);
+    }
+    return map;
+  }, [folders]);
+  const rootFolders = folderChildren.get(null) || [];
+  const unfiledItems = sessions.filter((item) => !item.folderId);
+  const folderOptions = useMemo(() => {
+    const options: { folder: Folder; depth: number }[] = [];
+    const walk = (parentId: string | null, depth: number) => {
+      for (const folder of folderChildren.get(parentId) || []) { options.push({ folder, depth }); walk(folder.id, depth + 1); }
+    };
+    walk(null, 0);
+    return options;
+  }, [folderChildren]);
+  const renderFolder = (folder: Folder, depth: number): React.ReactNode => {
+    const items = sessions.filter((item) => item.folderId === folder.id);
+    const children = folderChildren.get(folder.id) || [];
+    const collapsed = collapsedFolders.has(folder.id);
+    const indent = depth * 18;
+    const contentIndent = indent + 18;
+    return <div className={`folder-section ${dropTarget === folder.id ? 'drop-target' : ''} ${dragging?.type === 'folder' && dragging.id === folder.id ? 'dragging' : ''}`} key={folder.id} onDragOver={(event) => { if (!dragging || dragging.id === folder.id) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; setDropTarget(folder.id); }} onDragLeave={(event) => { if (event.currentTarget === event.target) setDropTarget((target) => (target === folder.id ? null : target)); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); dropOnFolder(folder.id); }}>
+      <div className="folder-header" style={{ paddingLeft: indent }}><button className="folder-toggle" draggable onClick={() => toggleFolder(folder.id)} aria-expanded={!collapsed} onDragStart={(event) => beginDrag('folder', folder.id, event)} onDragEnd={endDrag}>{collapsed ? <ChevronRight size={14}/> : <ChevronDown size={14}/>}<FolderOpen size={15}/><strong>{folder.name}</strong><span className="folder-count">{items.length}</span></button>{editingFolderId === folder.id ? null : <div className="folder-actions"><button onClick={() => startCreateSubfolder(folder.id)} aria-label={`New folder inside ${folder.name}`}><FolderPlus size={13}/></button><button onClick={() => startRenameFolder(folder)} aria-label={`Rename ${folder.name}`}><Pencil size={13}/></button><button onClick={() => deleteFolder(folder.id)} aria-label={`Delete ${folder.name}`}><Trash2 size={13}/></button></div>}</div>
+      {editingFolderId === folder.id && <div className="folder-edit" style={{ paddingLeft: indent }}><input autoFocus aria-label="Rename folder" value={folderName} onChange={(event) => setFolderName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') renameFolder(); if (event.key === 'Escape') cancelEditFolder(); }}/><button onClick={renameFolder} aria-label="Save folder name"><Check size={14}/></button><button onClick={cancelEditFolder} aria-label="Cancel"><X size={14}/></button></div>}
+      {creatingSubfolder === folder.id && <div className="folder-edit" style={{ paddingLeft: indent + 18 }}><input autoFocus aria-label="Folder name" value={folderName} placeholder="Folder name" onChange={(event) => setFolderName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') createFolder(); if (event.key === 'Escape') cancelCreateFolder(); }}/><button onClick={createFolder} aria-label="Create folder"><Check size={14}/></button><button onClick={cancelCreateFolder} aria-label="Cancel"><X size={14}/></button></div>}
+      {!collapsed && <>{children.map((child) => renderFolder(child, depth + 1))}{items.map((item) => renderSession(item, contentIndent))}{children.length === 0 && items.length === 0 && <div className="folder-empty" style={{ paddingLeft: contentIndent }}>No sessions in this folder.</div>}</>}
+      <div className="folder-separator" style={{ marginLeft: contentIndent }}/>
+    </div>;
+  };
+  const renderSession = (item: SessionSummary, indent: number): React.ReactNode => <SessionRow key={item.id} item={item} options={folderOptions} indent={indent} onMove={moveSession} disabled={state.status !== 'idle' && state.status !== 'error'} dragging={dragging?.type === 'session' && dragging.id === item.id} onDragStart={(event) => beginDrag('session', item.id, event)} onDragEnd={endDrag} onView={() => action(async () => { setArchived(await api!.loadSession(item.id)); setDemo(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); })} onRestore={() => restoreSession(item)} editing={editingSessionId === item.id} sessionName={sessionName} onSessionNameChange={setSessionName} onRenameStart={() => startRenameSession(item)} onRenameSave={renameSession} onRenameCancel={cancelRenameSession} onDelete={() => setDeletingSession(item)}/>;
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -129,8 +242,11 @@ export default function App() {
         <section className="page-heading"><div><h1>{page === 'sessions' ? 'Pick up the thread.' : 'Your browsing, connected.'}</h1></div><button className="button primary" onClick={() => setShowLaunch(true)} disabled={state.status === 'launching' || state.status === 'stopping'}><Plus size={17}/>New session</button></section>
 
         {page === 'sessions' ? <section className="sessions-panel">
-          <div className="section-heading"><h2>Saved sessions</h2><span>{sessions.length} sessions</span></div>
-          {sessions.length ? sessions.map((item) => <div className="saved-session" key={item.id}><button className="saved-session-view" onClick={() => action(async () => { setArchived(await api!.loadSession(item.id)); setDemo(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); })}><span className="saved-session-icon"><FolderClock size={22}/></span><div><strong>{item.name}</strong><span>{date(item.startedAt)} · {clock(item.startedAt)} · {item.browser === 'helium' ? 'Helium' : 'Chrome'}</span></div><span>{item.tabCount} tabs</span><ArrowRight size={18}/></button><button className="button secondary restore-session" disabled={state.status !== 'idle' && state.status !== 'error'} onClick={() => restoreSession(item)}><RefreshCw size={14}/>Restore</button></div>) : <div className="empty-state"><FolderClock size={35}/><h3>A fresh start.</h3><p>Your browsing sessions are saved automatically as you explore.<br/>Launch a browser to start your first one.</p><button className="button primary" onClick={() => setShowLaunch(true)}><Plus size={16}/>Start a session</button></div>}
+          <div className="section-heading"><h2>Saved sessions</h2><div className="section-heading-actions"><span className="section-count">{sessions.length} {sessions.length === 1 ? 'session' : 'sessions'}</span>{api && (creatingFolder ? <div className="folder-edit folder-edit-inline"><input autoFocus aria-label="Folder name" value={folderName} placeholder="Folder name" onChange={(event) => setFolderName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') createFolder(); if (event.key === 'Escape') cancelCreateFolder(); }}/><button onClick={createFolder} aria-label="Create folder"><Check size={14}/></button><button onClick={cancelCreateFolder} aria-label="Cancel"><X size={14}/></button></div> : <button className="button secondary folder-new" onClick={startCreateFolder}><FolderPlus size={15}/>New folder</button>)}</div></div>
+          {folders.length || sessions.length ? <div className={`sessions-groups ${dropTarget === 'root' ? 'drop-root' : ''}`} onDragOver={(event) => { if (dragging) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget('root'); } }} onDrop={(event) => { event.preventDefault(); dropOnRoot(); }}>
+            {rootFolders.map((folder) => renderFolder(folder, 0))}
+            {unfiledItems.length > 0 && <div className={`folder-section unfiled ${dropTarget === 'unfiled' ? 'drop-target' : ''}`} onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; setDropTarget('unfiled'); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); dropOnRoot(); }}><div className="folder-header"><button className="folder-toggle" onClick={() => toggleFolder('unfiled')} aria-expanded={!collapsedFolders.has('unfiled')}>{collapsedFolders.has('unfiled') ? <ChevronRight size={14}/> : <ChevronDown size={14}/>}<FolderOpen size={15}/><strong>Unfiled</strong><span className="folder-count">{unfiledItems.length}</span></button></div>{!collapsedFolders.has('unfiled') && unfiledItems.map((item) => renderSession(item, 18))}<div className="folder-separator" style={{ marginLeft: 18 }}/></div>}
+          </div> : <div className="empty-state"><FolderClock size={35}/><h3>A fresh start.</h3><p>Your browsing sessions are saved automatically as you explore.<br/>Launch a browser to start your first one.</p><button className="button primary" onClick={() => setShowLaunch(true)}><Plus size={16}/>Start a session</button></div>}
         </section> : <>
           <div className="stats-grid">
             <Stat icon={<Layers3 size={18}/>} label="Total tabs" value={session?.tabs.length || 0} detail="a trail of curiosity" color="purple"/>
@@ -157,6 +273,7 @@ export default function App() {
     {showLaunch && <LaunchDialog onClose={() => setShowLaunch(false)} running={state.status === 'live' || state.status === 'launching' || state.status === 'stopping'} onDemo={exploreDemo} onLaunch={async (options) => { if (!api) return; await api.launch(options); setDemo(null); setArchived(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); setShowLaunch(false); }}/>} 
     {showHelp && <Modal title="A map for your wandering mind." subtitle="A few small things to help you find your way." onClose={() => setShowHelp(false)}><div className="help-list"><div><Radio/><section><h3>Launch. Browse. See the story.</h3><p>Start a Helium or Chrome session. Tabline launches a separate browser profile with a local debug connection and tracks tabs as you browse.</p></section></div><div><GitBranch/><section><h3>One tab leads to another.</h3><p>Each row is a tab’s lifetime. Arrows show the parent tab reported by the browser. Tabs opened from the address bar or without an opener start a new thread.</p></section></div><div><Image/><section><h3>A little picture of where you’ve been.</h3><p>Thumbnails update after navigation and about every 20 seconds. Select a tab for its preview, navigation history, and browser controls. Some browser-internal pages may not allow screenshots.</p></section></div><div><ShieldCheck/><section><h3>Just on your device.</h3><p>Sessions, URLs, and thumbnails are saved locally in Tabline’s app data. Export a session as JSON to keep a portable copy. Ending a session closes its dedicated browser window.</p></section></div></div><button className="button primary full-width" onClick={() => setShowHelp(false)}>Got it, let’s explore <ArrowRight size={16}/></button></Modal>}
     {showStop && <Modal title="Call it a session?" subtitle="Your trail will be right here when you need it." onClose={() => setShowStop(false)}><p className="modal-description">This closes the browser launched by Tabline and saves your timeline, thumbnails, and connections on this device.</p><div className="modal-actions"><button className="button secondary" onClick={() => setShowStop(false)}>Keep exploring</button><button className="button primary" onClick={() => action(async () => { await api!.stop(); setShowStop(false); }, 'Session saved. A good place to pick up later.')}><Check size={16}/>End & save session</button></div></Modal>}
+    {deletingSession && <Modal title="Delete this session?" subtitle="This can’t be undone." onClose={() => setDeletingSession(null)}><p className="modal-description">“{deletingSession.name}” and its saved tabs, thumbnails, and connections will be removed from this device.</p><div className="modal-actions"><button className="button secondary" onClick={() => setDeletingSession(null)}>Keep it</button><button className="button primary" onClick={deleteSession}><Trash2 size={16}/>Delete session</button></div></Modal>}
     {toast && <div className="toast" role="status"><span>{toast}</span><button aria-label="Dismiss notification" onClick={() => setToast(null)}><X size={16}/></button></div>}
   </div>;
 }
@@ -165,20 +282,30 @@ function Stat({ icon, label, value, detail, color }: { icon: React.ReactNode; la
   return <div className="stat-card"><div className="stat-top"><span>{label}</span><span className={`stat-icon ${color}`}>{icon}</span></div><div className="stat-value">{value}<span className="stat-detail">{detail}</span></div></div>;
 }
 
+function SessionRow({ item, options, onMove, onView, onRestore, disabled, indent, dragging, onDragStart, onDragEnd, editing, sessionName, onSessionNameChange, onRenameStart, onRenameSave, onRenameCancel, onDelete }: { item: SessionSummary; options: { folder: Folder; depth: number }[]; onMove: (sessionId: string, folderId: string | null) => void; onView: () => void; onRestore: () => void; disabled: boolean; indent: number; dragging: boolean; onDragStart: (event: React.DragEvent) => void; onDragEnd: () => void; editing: boolean; sessionName: string; onSessionNameChange: (value: string) => void; onRenameStart: () => void; onRenameSave: () => void; onRenameCancel: () => void; onDelete: () => void }) {
+  return <div className={`saved-session ${dragging ? 'dragging' : ''} ${editing ? 'editing' : ''}`} style={{ paddingLeft: indent }}>{editing ? <div className="session-rename"><input autoFocus aria-label="Rename session" value={sessionName} onChange={(event) => onSessionNameChange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') onRenameSave(); if (event.key === 'Escape') onRenameCancel(); }}/><button onClick={onRenameSave} aria-label="Save session name"><Check size={14}/></button><button onClick={onRenameCancel} aria-label="Cancel"><X size={14}/></button></div> : <><button className="saved-session-view" draggable onClick={onView} onDragStart={onDragStart} onDragEnd={onDragEnd}><span className="saved-session-icon"><FolderClock size={22}/></span><div><strong>{item.name}</strong><span>{date(item.startedAt)} · {clock(item.startedAt)} · {item.browser === 'helium' ? 'Helium' : 'Chrome'}</span></div><span>{item.tabCount} tabs</span><ArrowRight size={18}/></button><label className="saved-session-folder" title="Move to folder"><FolderOpen size={13}/><span className="select-wrap"><select aria-label={`Move ${item.name} to folder`} value={item.folderId || ''} onChange={(event) => onMove(item.id, event.target.value || null)}><option value="">Unfiled</option>{options.map(({ folder, depth: optionDepth }) => <option key={folder.id} value={folder.id}>{'\u00A0'.repeat(optionDepth * 2)}{folder.name}</option>)}</select><ChevronDown size={13}/></span></label><div className="saved-session-actions"><button onClick={onRenameStart} aria-label={`Rename ${item.name}`} title="Rename session"><Pencil size={13}/></button><button onClick={onDelete} aria-label={`Delete ${item.name}`} title="Delete session"><Trash2 size={13}/></button></div><button className="button secondary restore-session" disabled={disabled} onClick={onRestore}><RefreshCw size={14}/>Restore</button></>}</div>;
+}
+
 function Timeline({ tabs, allTabs, session, now, selectedId, onSelect, thumbnails, connections, zoom }: { tabs: BrowserTab[]; allTabs: BrowserTab[]; session: Session; now: number; selectedId: string | null; onSelect: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number }) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const groups = Array.from(tabs.reduce((map, tab) => {
     const key = `${tab.desktopId || 'unknown'}::${tab.windowId || 'unknown'}`;
     if (!map.has(key)) map.set(key, []);
     map.get(key)!.push(tab);
     return map;
-  }, new Map<string, BrowserTab[]>()).entries());
-  return <div className="timeline-groups">{groups.map(([key, group]) => {
+  }, new Map<string, BrowserTab[]>()).entries()).map(([key, group]) => {
     const [desktop, window] = key.split('::');
-    return <section className="timeline-group" key={key}><div className="timeline-group-heading"><span className="group-mark"><Monitor size={13}/></span><strong>{desktop === 'unknown' ? 'Virtual desktop not available' : `Virtual desktop ${desktop}`}</strong><span className="group-separator">/</span><span>Window {window === 'unknown' ? 'unknown' : window}</span><span className="group-count">{group.length} {group.length === 1 ? 'tab' : 'tabs'}</span></div><TimelineCanvas tabs={group} allTabs={allTabs} session={session} now={now} selectedId={selectedId} onSelect={onSelect} thumbnails={thumbnails} connections={connections} zoom={zoom}/></section>;
-  })}</div>;
+    return { key, desktop, window, tabs: group };
+  });
+  const toggle = (key: string) => setCollapsed((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+  return <TimelineCanvas groups={groups} allTabs={allTabs} session={session} now={now} selectedId={selectedId} onSelect={onSelect} thumbnails={thumbnails} connections={connections} zoom={zoom} collapsed={collapsed} onToggle={toggle}/>;
 }
 
-function TimelineCanvas({ tabs, allTabs, session, now, selectedId, onSelect, thumbnails, connections, zoom }: { tabs: BrowserTab[]; allTabs: BrowserTab[]; session: Session; now: number; selectedId: string | null; onSelect: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number }) {
+function TimelineCanvas({ groups, allTabs, session, now, selectedId, onSelect, thumbnails, connections, zoom, collapsed, onToggle }: { groups: { key: string; desktop: string; window: string; tabs: BrowserTab[] }[]; allTabs: BrowserTab[]; session: Session; now: number; selectedId: string | null; onSelect: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number; collapsed: Set<string>; onToggle: (key: string) => void }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(700);
   useEffect(() => {
@@ -193,29 +320,51 @@ function TimelineCanvas({ tabs, allTabs, session, now, selectedId, onSelect, thu
   const x = (time: number) => padding + Math.max(0, (time - session.startedAt) / span) * plotWidth;
   const nowX = x(now);
   const rowHeight = 60;
-  return <div className="timeline-scroll" ref={viewportRef}><div className="timeline-canvas" style={{ width, minHeight: Math.max(460, tabs.length * rowHeight + 68) }}>
+  const headerHeight = 35;
+  const headingHeight = 34;
+
+  const sections = groups.map((group) => ({ ...group, isCollapsed: collapsed.has(group.key) }));
+  let cursor = headerHeight;
+  const rowY = new Map<string, number>();
+  const visibleTabs: BrowserTab[] = [];
+  for (const section of sections) {
+    cursor += headingHeight;
+    if (!section.isCollapsed) {
+      for (const tab of section.tabs) {
+        rowY.set(tab.id, cursor + rowHeight / 2);
+        visibleTabs.push(tab);
+        cursor += rowHeight;
+      }
+    }
+  }
+  const contentHeight = Math.max(460, cursor + 34);
+
+  return <div className="timeline-scroll" ref={viewportRef}><div className="timeline-canvas" style={{ width, minHeight: contentHeight }}>
     <div className="axis-header"><span className="axis-start">TIME</span>{Array.from({ length: 6 }, (_, i) => <span key={i} style={{ left: padding + i * plotWidth / 5 }}>{clock(session.startedAt + span * i / 5)}</span>)}</div>
     <div className="grid-lines">{Array.from({ length: 6 }, (_, i) => <i key={i} style={{ left: padding + i * plotWidth / 5 }}/>)}</div>
     <div className="now-line" style={{ left: nowX }}><span>{session.endedAt ? 'END' : 'NOW'}</span><i/></div>
-    {connections && <svg className="connections" width={width} height={tabs.length * rowHeight + 68} aria-label="Tab opener connections"><defs><marker id="arrow" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#b09a7b" strokeWidth="1.2"/></marker><marker id="arrow-selected" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#d49b58" strokeWidth="1.2"/></marker></defs>{tabs.map((tab, index) => {
-      const parentIndex = tabs.findIndex((item) => item.id === tab.openerId);
-      if (parentIndex === -1) return null;
-      const parent = tabs[parentIndex];
+    {connections && <svg className="connections" width={width} height={contentHeight} aria-label="Tab opener connections"><defs><marker id="arrow" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#b09a7b" strokeWidth="1.2"/></marker><marker id="arrow-selected" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#d49b58" strokeWidth="1.2"/></marker></defs>{visibleTabs.map((tab) => {
+      const openerId = tab.openerId;
+      if (!openerId) return null;
+      const parentY = rowY.get(openerId);
+      if (parentY === undefined) return null;
+      const parent = allTabs.find((item) => item.id === openerId);
+      if (!parent) return null;
+      const targetY = rowY.get(tab.id)!;
       const targetX = x(tab.openedAt);
       const sourceX = Math.max(x(parent.openedAt) + 9, targetX - 18);
-      const sourceY = 66 + parentIndex * rowHeight + (parentIndex < index ? 24 : -24);
-      const targetY = 66 + index * rowHeight;
-      const bend = parentIndex < index ? 9 : -9;
+      const sourceY = parentY + (parentY < targetY ? 24 : -24);
+      const bend = parentY < targetY ? 9 : -9;
       const active = tab.id === selectedId || tab.openerId === selectedId;
       return <path key={tab.id} d={`M ${sourceX} ${sourceY} L ${sourceX} ${targetY - bend} Q ${sourceX} ${targetY} ${sourceX + 9} ${targetY} L ${targetX - 3} ${targetY}`} stroke={active ? '#d49b58' : '#b7aa98'} strokeWidth={active ? 1.6 : 1.2} opacity={active ? 1 : 0.65} fill="none" markerEnd={`url(#${active ? 'arrow-selected' : 'arrow'})`}/>;
     })}</svg>}
-    <div className="timeline-rows">{tabs.map((tab) => {
+    <div className="timeline-rows">{sections.map((section) => <Fragment key={section.key}><button type="button" className={`timeline-separator ${section.isCollapsed ? 'collapsed' : ''}`} onClick={() => onToggle(section.key)} aria-expanded={!section.isCollapsed}><span className="group-mark"><Monitor size={13}/></span><strong>{section.desktop === 'unknown' ? 'Virtual desktop not available' : `Virtual desktop ${section.desktop}`}</strong><span className="group-separator">/</span><span>Window {section.window === 'unknown' ? 'unknown' : section.window}</span><span className="group-count">{section.tabs.length} {section.tabs.length === 1 ? 'tab' : 'tabs'}</span><span className="separator-chevron">{section.isCollapsed ? <ChevronRight size={13}/> : <ChevronDown size={13}/>}</span></button>{!section.isCollapsed && section.tabs.map((tab) => {
       const left = x(tab.openedAt);
       const barWidth = Math.max(8, x(tab.closedAt || now) - left);
       const showImage = thumbnails && barWidth > 160;
       const number = allTabs.findIndex((item) => item.id === tab.id) + 1;
       return <div className={`timeline-row ${selectedId === tab.id ? 'selected' : ''}`} key={tab.id} style={{ height: rowHeight }}><span className="row-number">{String(number).padStart(2, '0')}</span><button title={`${tab.title}\n${tab.url}\nOpened ${clock(tab.openedAt)}${tab.closedAt ? ` · Closed ${clock(tab.closedAt)}` : ' · Still open'}${tab.groupTitle ? `\nGroup: ${tab.groupTitle}` : ''}`} aria-label={`View ${tab.title}`} className={`tab-bar ${siteColor(tab)} ${tab.closedAt ? 'is-closed' : ''} ${selectedId === tab.id ? 'is-selected' : ''} ${barWidth < 120 ? 'compact' : ''}`} style={{ left, width: barWidth }} onClick={() => onSelect(tab.id)}>{showImage && <span className="bar-thumbnail">{tab.thumbnail ? <img src={tab.thumbnail} alt={`Thumbnail of ${tab.title}`}/> : <Globe2 size={23}/>}</span>}<span className="bar-content"><span className="bar-title"><SiteIcon tab={tab} size="small"/><strong>{tab.title}</strong>{tab.groupTitle && <span className="group-chip" style={{ '--group-color': tab.groupColor || '#9ca8bb' } as React.CSSProperties}>{tab.groupTitle}</span>}{tab.closedAt && barWidth > 200 && <X size={11}/>}</span><span className="bar-subtitle">{domain(tab.url)}<span>·</span>{duration((tab.closedAt || now) - tab.openedAt)}</span></span>{!tab.closedAt && <span className="bar-end-dot"/>}</button>{barWidth < 120 && <button className="overflow-tab-label" style={{ left: Math.min(left + barWidth + 7, width - 115) }} onClick={() => onSelect(tab.id)}>{siteName(tab)}</button>}</div>;
-    })}</div>
+    })}</Fragment>)}</div>
     <div className="timeline-start-note" style={{ left: padding }}><span/>The start of something</div>
   </div></div>;
 }

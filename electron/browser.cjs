@@ -124,9 +124,101 @@ class BrowserController extends EventEmitter {
     return fs.readdirSync(path.join(this.dataDir, 'sessions')).filter((name) => name.endsWith('.json')).flatMap((name) => {
       try {
         const session = JSON.parse(fs.readFileSync(path.join(this.dataDir, 'sessions', name), 'utf8'));
-        return [{ id: session.id, name: session.name, startedAt: session.startedAt, endedAt: session.endedAt, browser: session.browser, tabCount: session.tabs.length }];
+        return [{ id: session.id, name: session.name, startedAt: session.startedAt, endedAt: session.endedAt, browser: session.browser, tabCount: session.tabs.length, folderId: session.folderId || null }];
       } catch { return []; }
     }).sort((a, b) => b.startedAt - a.startedAt);
+  }
+
+  foldersFile() { return path.join(this.dataDir, 'folders.json'); }
+  readFolders() { try { const items = JSON.parse(fs.readFileSync(this.foldersFile(), 'utf8')); return Array.isArray(items) ? items : []; } catch { return []; } }
+  writeFolders(folders) { const file = this.foldersFile(); fs.writeFileSync(`${file}.tmp`, JSON.stringify(folders)); fs.renameSync(`${file}.tmp`, file); }
+  listFolders() { return this.readFolders().sort((a, b) => a.createdAt - b.createdAt); }
+  createFolder(name, parentId = null) {
+    const trimmed = String(name || '').trim().slice(0, 60);
+    if (!trimmed) throw new Error('Enter a folder name.');
+    if (parentId && !/^[a-f0-9-]{36}$/.test(parentId)) throw new Error('Invalid folder ID');
+    const folders = this.readFolders();
+    if (parentId && !folders.some((folder) => folder.id === parentId)) throw new Error('Folder not found.');
+    const parentKey = parentId || null;
+    if (folders.some((folder) => (folder.parentId || null) === parentKey && folder.name.toLowerCase() === trimmed.toLowerCase())) throw new Error('A folder with that name already exists here.');
+    const folder = { id: randomUUID(), name: trimmed, createdAt: Date.now(), parentId: parentKey };
+    folders.push(folder);
+    this.writeFolders(folders);
+    return folder;
+  }
+  renameFolder(id, name) {
+    const trimmed = String(name || '').trim().slice(0, 60);
+    if (!trimmed) throw new Error('Enter a folder name.');
+    const folders = this.readFolders();
+    const folder = folders.find((item) => item.id === id);
+    if (!folder) throw new Error('Folder not found.');
+    if (folders.some((item) => item.id !== id && (item.parentId || null) === (folder.parentId || null) && item.name.toLowerCase() === trimmed.toLowerCase())) throw new Error('A folder with that name already exists here.');
+    folder.name = trimmed;
+    this.writeFolders(folders);
+    return folder;
+  }
+  setFolderParent(id, parentId) {
+    if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid folder ID');
+    if (parentId && !/^[a-f0-9-]{36}$/.test(parentId)) throw new Error('Invalid folder ID');
+    const folders = this.readFolders();
+    const folder = folders.find((item) => item.id === id);
+    if (!folder) throw new Error('Folder not found.');
+    if (parentId) {
+      if (parentId === id) throw new Error('A folder cannot be inside itself.');
+      if (!folders.some((item) => item.id === parentId)) throw new Error('Folder not found.');
+      let current = folders.find((item) => item.id === parentId);
+      while (current && current.parentId) {
+        if (current.parentId === id) throw new Error('A folder cannot be moved inside one of its own subfolders.');
+        current = folders.find((item) => item.id === current.parentId);
+      }
+    }
+    folder.parentId = parentId || null;
+    this.writeFolders(folders);
+    return folder;
+  }
+  deleteFolder(id) {
+    const folders = this.readFolders();
+    const toDelete = new Set([id]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const item of folders) {
+        if (item.parentId && toDelete.has(item.parentId) && !toDelete.has(item.id)) { toDelete.add(item.id); grew = true; }
+      }
+    }
+    this.writeFolders(folders.filter((item) => !toDelete.has(item.id)));
+    const dir = path.join(this.dataDir, 'sessions');
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith('.json')) continue;
+      const full = path.join(dir, name);
+      try {
+        const session = JSON.parse(fs.readFileSync(full, 'utf8'));
+        if (session.folderId && toDelete.has(session.folderId)) { session.folderId = null; fs.writeFileSync(full, JSON.stringify(session)); }
+      } catch {}
+    }
+  }
+  setSessionFolder(sessionId, folderId) {
+    if (!/^[a-f0-9-]{36}$/.test(sessionId)) throw new Error('Invalid session ID');
+    if (folderId && !/^[a-f0-9-]{36}$/.test(folderId)) throw new Error('Invalid folder ID');
+    const full = path.join(this.dataDir, 'sessions', `${sessionId}.json`);
+    const session = JSON.parse(fs.readFileSync(full, 'utf8'));
+    session.folderId = folderId || null;
+    fs.writeFileSync(full, JSON.stringify(session));
+  }
+
+  renameSession(id, name) {
+    if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid session ID');
+    const trimmed = String(name || '').trim().slice(0, 80);
+    if (!trimmed) throw new Error('Enter a session name.');
+    const full = path.join(this.dataDir, 'sessions', `${id}.json`);
+    const session = JSON.parse(fs.readFileSync(full, 'utf8'));
+    session.name = trimmed;
+    fs.writeFileSync(full, JSON.stringify(session));
+  }
+
+  deleteSession(id) {
+    if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid session ID');
+    fs.rmSync(path.join(this.dataDir, 'sessions', `${id}.json`), { force: true });
   }
 
   loadSession(id) {

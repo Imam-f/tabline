@@ -39,6 +39,14 @@ else {
     ipcMain.handle('sessions:list', () => controller.listSessions());
     ipcMain.handle('sessions:load', (_event, id) => controller.loadSession(id));
     ipcMain.handle('sessions:restore', (_event, id, options) => controller.restoreSession(id, options));
+    ipcMain.handle('folders:list', () => controller.listFolders());
+    ipcMain.handle('folder:create', (_event, name, parentId) => controller.createFolder(name, parentId));
+    ipcMain.handle('folder:rename', (_event, id, name) => controller.renameFolder(id, name));
+    ipcMain.handle('folder:delete', (_event, id) => controller.deleteFolder(id));
+    ipcMain.handle('folder:move', (_event, id, parentId) => controller.setFolderParent(id, parentId));
+    ipcMain.handle('session:set-folder', (_event, sessionId, folderId) => controller.setSessionFolder(sessionId, folderId));
+    ipcMain.handle('session:rename', (_event, id, name) => controller.renameSession(id, name));
+    ipcMain.handle('session:delete', (_event, id) => controller.deleteSession(id));
     ipcMain.handle('session:export', async (_event, session) => {
       const result = await dialog.showSaveDialog(window, { title: 'Export session', defaultPath: `tabline-${new Date(session.startedAt).toISOString().slice(0, 10)}.json`, filters: [{ name: 'JSON session', extensions: ['json'] }] });
       if (result.canceled) return false;

@@ -43,7 +43,8 @@ export interface AppState {
 }
 export interface BrowserChoice { id: 'helium' | 'chrome'; name: string; path: string | null }
 export interface LaunchOptions { browser: 'helium' | 'chrome'; executable?: string; url: string; name: string }
-export interface SessionSummary { id: string; name: string; startedAt: number; endedAt: number | null; browser: string; tabCount: number }
+export interface SessionSummary { id: string; name: string; startedAt: number; endedAt: number | null; browser: string; tabCount: number; folderId: string | null }
+export interface Folder { id: string; name: string; createdAt: number; parentId: string | null }
 export interface RestoreResult { state: AppState; requested: number; opened: number; skipped: number; failed: number; desktopFailed: number; groupsRestored: boolean; warnings: string[] }
 export interface TablineAPI {
   getState(): Promise<AppState>;
@@ -58,6 +59,14 @@ export interface TablineAPI {
   loadSession(id: string): Promise<Session>;
   restoreSession(id: string, options?: { executable?: string }): Promise<RestoreResult>;
   exportSession(session: Session): Promise<boolean>;
+  listFolders(): Promise<Folder[]>;
+  createFolder(name: string, parentId?: string | null): Promise<Folder>;
+  renameFolder(id: string, name: string): Promise<Folder>;
+  deleteFolder(id: string): Promise<void>;
+  setFolderParent(id: string, parentId: string | null): Promise<Folder>;
+  setSessionFolder(sessionId: string, folderId: string | null): Promise<void>;
+  renameSession(id: string, name: string): Promise<void>;
+  deleteSession(id: string): Promise<void>;
   onState(callback: (state: AppState) => void): () => void;
 }
 declare global { interface Window { tabline?: TablineAPI } }
