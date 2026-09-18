@@ -14,7 +14,6 @@
 .nav-item.active{background:#333c38;color:#def296}
 .nav-item.active>svg{color:#d7ec91}
 .nav-item>span:nth-child(2){flex:1}
-.nav-live-dot{width:5px;height:5px;background:#d8ec9a;border-radius:100%}
 .sidebar-session-heading{display:flex;align-items:center;justify-content:space-between;margin-top:31px;margin-bottom:11px;letter-spacing:1.25px;font-size:9px}
 .current-session{display:flex;gap:9px;align-items:flex-start;text-align:left;padding:9px 12px;width:100%}
 .current-session>.tiny-dot{margin-top:5px}
@@ -151,3 +150,5 @@ main{padding:33px 34px 0;max-width:1800px;margin:auto}
 .session-rename input:focus{outline:0;border-color:#8196f4}
 .session-rename button{width:28px;height:28px;display:grid;place-items:center;border-radius:5px;color:#8c95a4;border:1px solid #e6e9ee;background:#fff;flex:none}
 .session-rename button:hover{background:#f3f5f9}
+.sessions-panel,.timeline-panel{margin-bottom:34px}
+@media(max-width:760px){.sessions-panel,.timeline-panel{margin-bottom:24px}}

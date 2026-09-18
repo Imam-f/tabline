@@ -226,7 +226,7 @@ export default function App() {
       <a className="brand" href="#" onClick={(event) => { event.preventDefault(); setPage('workspace'); }} aria-label="Tabline home"><span className="brand-mark"><span/><span/><span/></span><span>tabline<span className="brand-dot">.</span></span></a>
       <div className="nav-heading">WORKSPACE</div>
       <nav>
-        <button className={`nav-item ${page === 'workspace' ? 'active' : ''}`} onClick={() => setPage('workspace')}><Activity size={18}/><span>Browser timeline</span><span className="nav-live-dot"/></button>
+        <button className={`nav-item ${page === 'workspace' ? 'active' : ''}`} onClick={() => setPage('workspace')}><Activity size={18}/><span>Browser timeline</span></button>
         <button className={`nav-item ${page === 'sessions' ? 'active' : ''}`} onClick={openSessions}><FolderClock size={18}/><span>Saved sessions</span></button>
       </nav>
       <div className="sidebar-session-heading"><span>CURRENT SESSION</span></div>
