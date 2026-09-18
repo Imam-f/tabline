@@ -88,7 +88,7 @@ Data lives inside Electron’s platform-specific `userData` directory:
 | macOS | `~/Library/Application Support/tabline/browser-data/` |
 | Linux | `~/.config/tabline/browser-data/` |
 
-The `sessions/` folder contains JSON sessions (including base64 JPEG thumbnails). The `profiles/` folder contains the dedicated browser profiles. URLs and visible page content can be present in session exports.
+The `sessions/` folder contains JSON sessions (including base64 JPEG thumbnails). The `profiles/` folder contains the dedicated browser profiles. URLs and visible page content can be present in session exports. 
 
 ## Development & checks
 
