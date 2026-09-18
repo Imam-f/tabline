@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('tabline', {
   setSessionFolder: (sessionId, folderId) => ipcRenderer.invoke('session:set-folder', sessionId, folderId),
   renameSession: (id, name) => ipcRenderer.invoke('session:rename', id, name),
   deleteSession: (id) => ipcRenderer.invoke('session:delete', id),
+  minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
+  toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),
+  closeWindow: () => ipcRenderer.invoke('window:close'),
   onState: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('state:changed', listener);

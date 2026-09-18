@@ -47,6 +47,14 @@ else {
     ipcMain.handle('session:set-folder', (_event, sessionId, folderId) => controller.setSessionFolder(sessionId, folderId));
     ipcMain.handle('session:rename', (_event, id, name) => controller.renameSession(id, name));
     ipcMain.handle('session:delete', (_event, id) => controller.deleteSession(id));
+    ipcMain.handle('window:minimize', (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
+    ipcMain.handle('window:toggle-maximize', (event) => {
+      const senderWindow = BrowserWindow.fromWebContents(event.sender);
+      if (!senderWindow) return;
+      if (senderWindow.isMaximized()) senderWindow.unmaximize();
+      else senderWindow.maximize();
+    });
+    ipcMain.handle('window:close', (event) => BrowserWindow.fromWebContents(event.sender)?.close());
     ipcMain.handle('session:export', async (_event, session) => {
       const result = await dialog.showSaveDialog(window, { title: 'Export session', defaultPath: `tabline-${new Date(session.startedAt).toISOString().slice(0, 10)}.json`, filters: [{ name: 'JSON session', extensions: ['json'] }] });
       if (result.canceled) return false;
@@ -72,7 +80,7 @@ else {
 function createWindow() {
   window = new BrowserWindow({
     width: 1480, height: 960, minWidth: 1000, minHeight: 700,
-    title: 'Tabline', backgroundColor: '#f8f9fb', autoHideMenuBar: true,
+    title: 'Tabline', backgroundColor: '#f8f9fb', autoHideMenuBar: true, frame: false,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

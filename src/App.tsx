@@ -222,6 +222,13 @@ export default function App() {
   const renderSession = (item: SessionSummary, indent: number): React.ReactNode => <SessionRow key={item.id} item={item} options={folderOptions} indent={indent} onMove={moveSession} disabled={state.status !== 'idle' && state.status !== 'error'} dragging={dragging?.type === 'session' && dragging.id === item.id} onDragStart={(event) => beginDrag('session', item.id, event)} onDragEnd={endDrag} onView={() => action(async () => { setArchived(await api!.loadSession(item.id)); setDemo(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); })} onRestore={() => restoreSession(item)} editing={editingSessionId === item.id} sessionName={sessionName} onSessionNameChange={setSessionName} onRenameStart={() => startRenameSession(item)} onRenameSave={renameSession} onRenameCancel={cancelRenameSession} onDelete={() => setDeletingSession(item)}/>;
 
   return <div className="app-shell">
+    <header className="window-titlebar">
+      <div className="window-controls">
+        <button onClick={() => api?.minimizeWindow()} aria-label="Minimize window"><Minus size={15}/></button>
+        <button onClick={() => api?.toggleMaximizeWindow()} aria-label="Maximize or restore window"><Maximize2 size={13}/></button>
+        <button className="window-close" onClick={() => api?.closeWindow()} aria-label="Close window"><X size={16}/></button>
+      </div>
+    </header>
     <aside className="sidebar">
       <a className="brand" href="#" onClick={(event) => { event.preventDefault(); setPage('workspace'); }} aria-label="Tabline home"><span className="brand-mark"><span/><span/><span/></span><span>tabline<span className="brand-dot">.</span></span></a>
       <div className="nav-heading">WORKSPACE</div>
@@ -237,7 +244,6 @@ export default function App() {
     </aside>
 
     <div className="main-shell">
-      <header className="topbar"><div className="breadcrumb"><span>Workspace</span><ChevronRight size={14}/><strong>{page === 'sessions' ? 'Saved sessions' : 'Browser timeline'}</strong></div><div className="topbar-right"><button className="icon-button" onClick={() => setShowHelp(true)} aria-label="Help"><CircleHelp size={18}/></button></div></header>
       <main>
         <section className="page-heading"><div><h1>{page === 'sessions' ? 'Pick up the thread.' : 'Your browsing, connected.'}</h1></div><button className="button primary" onClick={() => setShowLaunch(true)} disabled={state.status === 'launching' || state.status === 'stopping'}><Plus size={17}/>New session</button></section>
 

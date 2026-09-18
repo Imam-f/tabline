@@ -67,6 +67,9 @@ export interface TablineAPI {
   setSessionFolder(sessionId: string, folderId: string | null): Promise<void>;
   renameSession(id: string, name: string): Promise<void>;
   deleteSession(id: string): Promise<void>;
+  minimizeWindow(): Promise<void>;
+  toggleMaximizeWindow(): Promise<void>;
+  closeWindow(): Promise<void>;
   onState(callback: (state: AppState) => void): () => void;
 }
 declare global { interface Window { tabline?: TablineAPI } }

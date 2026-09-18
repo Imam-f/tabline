@@ -1,7 +1,12 @@
 :root{font-family:Inter,"Segoe UI",-apple-system,BlinkMacSystemFont,sans-serif;color:#252b38;background:#f7f8fa;font-synthesis:none;font-weight:400;--muted:#8a8f9c;--border:#e8eaee;--blue:#4865e8;--sidebar:#1b2230}
 *{box-sizing:border-box}body{margin:0}button,input,select{font:inherit}button,a,input,select{-webkit-tap-highlight-color:transparent}button{cursor:pointer}button{color:inherit}button:disabled{cursor:default;opacity:.45}button:focus-visible,a:focus-visible,select:focus-visible{outline:3px solid #8196f4;outline-offset:3px}input:focus-visible{outline:0}button{border:0;background:none}a{color:inherit;text-decoration:none}svg{flex-shrink:0}::selection{background:#dae2ff}::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-thumb{background:#d6dae1;border-radius:5px}::-webkit-scrollbar-track{background:transparent}
-.app-shell{display:flex;min-height:100vh}
-.sidebar{width:228px;position:fixed;inset:0 auto 0 0;display:flex;flex-direction:column;background:var(--sidebar);padding:31px 17px 0;color:#a8afbd;z-index:20}
+.app-shell{--sidebar-width:228px;display:flex;min-height:100vh;padding-top:36px}
+.window-titlebar{position:fixed;inset:0 0 auto;height:36px;z-index:30;display:flex;background:linear-gradient(to right,var(--sidebar) 0 var(--sidebar-width),#fdfdfe var(--sidebar-width) 100%);-webkit-app-region:drag;user-select:none}
+.window-controls{display:flex;height:100%;margin-left:auto;-webkit-app-region:no-drag}
+.window-controls button{width:46px;height:100%;display:grid;place-items:center;color:#7f8794;border-radius:0}
+.window-controls button:hover{background:#e9ecf1;color:#343b47}
+.window-controls .window-close:hover{background:#d94b4b;color:#fff}
+.sidebar{width:228px;position:fixed;inset:36px auto 0 0;display:flex;flex-direction:column;background:var(--sidebar);padding:31px 17px 0;color:#a8afbd;z-index:20}
 .brand{display:flex;align-items:center;gap:10px;font-size:30px;font-weight:720;letter-spacing:-1.4px;color:#fafbf9;padding:0 13px;margin-bottom:42px}
 .brand-dot{color:#d7ee8a}
 .brand-mark{width:29px;height:30px;position:relative;display:block;transform:rotate(-5deg)}
@@ -152,3 +157,7 @@ main{padding:33px 34px 0;max-width:1800px;margin:auto}
 .session-rename button:hover{background:#f3f5f9}
 .sessions-panel,.timeline-panel{margin-bottom:34px}
 @media(max-width:760px){.sessions-panel,.timeline-panel{margin-bottom:24px}}
+@media(min-width:1600px){.app-shell{--sidebar-width:248px}}
+@media(max-width:1200px){.app-shell{--sidebar-width:202px}}
+@media(max-width:1020px){.app-shell{--sidebar-width:183px}}
+@media(max-width:760px){.app-shell{--sidebar-width:64px}}
