@@ -59,7 +59,7 @@ function upsertTarget(session, info, now = Date.now()) {
   }
   let tab = session.tabs.find((item) => item.id === info.targetId);
   if (!tab) {
-    tab = { id: info.targetId, title: info.title || 'New tab', url: info.url || 'about:blank', openedAt: now, closedAt: null, openAtEnd: true, openerId: info.openerId || null, windowId: info.windowId || null, desktopId: info.desktopId || 'unknown', windowHistory: [], extensionTabId: null, extensionWindowId: null, tabIndex: null, pinned: false, active: false, lastActiveAt: null, inactiveScreenshotAt: null, frozen: false, frozenSlug: null, originalUrl: null, orderHistory: [], groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [], thumbnail: null, thumbnailAt: null, navigations: [] };
+    tab = { id: info.targetId, title: info.title || 'New tab', url: info.url || 'about:blank', openedAt: now, closedAt: null, openAtEnd: true, openerId: info.openerId || null, windowId: info.windowId || null, desktopId: info.desktopId || 'unknown', windowHistory: [], extensionTabId: null, extensionWindowId: null, tabIndex: null, pinned: false, active: false, focused: false, lastActiveAt: null, inactiveScreenshotAt: null, frozen: false, frozenSlug: null, originalUrl: null, orderHistory: [], groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [], thumbnail: null, thumbnailAt: null, navigations: [] };
     session.tabs.push(tab);
   }
   if (info.openerId) tab.openerId = info.openerId;
@@ -276,7 +276,7 @@ class BrowserController extends EventEmitter {
   loadSession(id) {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid session ID');
     const session = JSON.parse(fs.readFileSync(path.join(this.dataDir, 'sessions', `${id}.json`), 'utf8'));
-    session.tabs.forEach((tab) => { tab.windowHistory ||= []; tab.desktopId ||= 'unknown'; tab.windowId ||= null; tab.extensionTabId ??= null; tab.extensionWindowId ??= null; tab.tabIndex ??= null; tab.pinned ||= false; tab.active ||= false; tab.lastActiveAt ??= null; tab.inactiveScreenshotAt ??= null; tab.frozen ||= false; tab.frozenSlug ??= null; tab.originalUrl ??= null; tab.orderHistory ||= []; tab.groupId ??= null; tab.groupTitle ??= null; tab.groupColor ??= null; tab.groupCollapsed ||= false; tab.groupHistory ||= []; });
+    session.tabs.forEach((tab) => { tab.windowHistory ||= []; tab.desktopId ||= 'unknown'; tab.windowId ||= null; tab.extensionTabId ??= null; tab.extensionWindowId ??= null; tab.tabIndex ??= null; tab.pinned ||= false; tab.active ||= false; tab.focused ||= false; tab.lastActiveAt ??= null; tab.inactiveScreenshotAt ??= null; tab.frozen ||= false; tab.frozenSlug ??= null; tab.originalUrl ??= null; tab.orderHistory ||= []; tab.groupId ??= null; tab.groupTitle ??= null; tab.groupColor ??= null; tab.groupCollapsed ||= false; tab.groupHistory ||= []; });
     // A session interrupted by an app/process crash has no explicit end time.
     if (!session.endedAt && session.id !== this.session?.id) {
       session.endedAt = Math.max(session.startedAt, ...session.tabs.flatMap((tab) => [tab.openedAt, tab.closedAt || 0, tab.thumbnailAt || 0, ...tab.navigations.map((nav) => nav.at)]));
@@ -396,7 +396,8 @@ class BrowserController extends EventEmitter {
     }
     this.refreshTargetLocation(tab).then(() => this.publish()).catch(() => {});
     this.publish();
-    if (shouldCapture) {
+    // Avoid repainting the page the user is currently viewing.
+    if (shouldCapture && !tab.active) {
       clearTimeout(this.captureTimers.get(tab.id));
       this.captureTimers.set(tab.id, setTimeout(() => {
         this.captureTimers.delete(tab.id);
@@ -486,6 +487,7 @@ class BrowserController extends EventEmitter {
     tab.tabIndex = Number.isInteger(info.index) ? info.index : tab.tabIndex ?? null;
     tab.pinned = typeof info.pinned === 'boolean' ? info.pinned : !!tab.pinned;
     tab.active = nextActive;
+    tab.focused = typeof info.focused === 'boolean' ? info.focused : !!tab.focused;
     if (nextActive && (!wasActive || !tab.lastActiveAt)) {
       tab.lastActiveAt = now;
       tab.inactiveScreenshotAt = null;
@@ -693,7 +695,7 @@ class BrowserController extends EventEmitter {
     if (this.captureBusy || this.status !== 'live') return;
     this.captureBusy = true;
     try {
-      for (const tab of this.session.tabs.filter((item) => !item.closedAt && !item.frozen && !item.inactiveScreenshotAt)) {
+      for (const tab of this.session.tabs.filter((item) => !item.closedAt && !item.frozen && !item.inactiveScreenshotAt && item.active === false)) {
         if (this.status !== 'live') break;
         await this.capture(tab.id).catch(() => {});
       }
@@ -753,10 +755,23 @@ class BrowserController extends EventEmitter {
     const saved = this.loadSession(id);
     const plan = buildRestorePlan(saved);
     if (!plan.windows.length) throw new Error('This session has no restorable web tabs.');
+    let browser = options.browser === 'chrome' || options.browser === 'helium' ? options.browser : saved.browser;
+    let executable = options.executable;
+    let browserWarning = null;
+    const detected = detectBrowsers();
+    if (!executable || !fs.existsSync(executable)) executable = detected.find((item) => item.id === browser)?.path || null;
+    if (!executable) {
+      const fallback = detected.find((item) => item.path);
+      if (fallback) {
+        browserWarning = `Saved browser ${browser === 'helium' ? 'Helium' : 'Chrome'} was unavailable; restored with ${fallback.name}.`;
+        browser = fallback.id;
+        executable = fallback.path;
+      }
+    }
     this.pendingRestore = { plan, delivered: false };
     const resultPromise = new Promise((resolve) => { this.restoreResolve = resolve; });
     try {
-      await this.launch({ browser: saved.browser, executable: options.executable, name: `${saved.name} (restored)`, url: plan.windows[0].tabs[0].url });
+      await this.launch({ browser, executable, name: `${saved.name} (restored)`, url: plan.windows[0].tabs[0].url });
       this.session.restoredFromSessionId = saved.id;
       let result = await Promise.race([resultPromise, delay(5000).then(() => null)]);
       if (!result && this.pendingRestore?.delivered) result = await Promise.race([resultPromise, delay(30000).then(() => null)]);
@@ -786,7 +801,7 @@ class BrowserController extends EventEmitter {
         result = { opened, failed: failures.length, groupsRestored: false, windows: restoredWindows, warnings: ['The companion extension was unavailable; tab pinning, exact order, groups, and opener links could not be restored.', ...failures] };
       }
       const desktopWarnings = await this.restoreVirtualDesktops(plan, result.windows || []);
-      result.warnings = [...(result.warnings || []), ...desktopWarnings];
+      result.warnings = [...(browserWarning ? [browserWarning] : []), ...(result.warnings || []), ...desktopWarnings];
       result.desktopFailed = desktopWarnings.length;
       this.pendingRestore = null;
       this.publish();

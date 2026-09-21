@@ -3,7 +3,7 @@
   "name": "Tabline companion",
   "version": "1.0.0",
   "description": "Tracks and restores tab order and groups for the local Tabline app.",
-  "permissions": ["tabs", "tabGroups", "debugger", "alarms"],
+  "permissions": ["tabs", "tabGroups", "windows", "debugger", "alarms"],
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
   "action": { "default_title": "Tabline freezer", "default_popup": "popup.html" },
   "background": { "service_worker": "background.js" }

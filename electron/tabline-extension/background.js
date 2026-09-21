@@ -18,13 +18,23 @@ function queryTabs() {
   return new Promise((resolve) => chrome.tabs.query({}, (tabs) => resolve(tabs || [])));
 }
 
+function queryWindows() {
+  try {
+    const result = chrome.windows.getAll({ populate: false });
+    if (result?.then) return result;
+  } catch {}
+  return new Promise((resolve) => chrome.windows.getAll({ populate: false }, (windows) => resolve(windows || [])));
+}
+
 async function sendSnapshot(tabIds = null) {
   if (!bridgeUrl) return;
   const targets = await targetMap();
   const tabs = await queryTabs();
+  const windows = await queryWindows();
+  const focusedWindows = new Set(windows.filter((window) => window.focused).map((window) => window.id));
   const fallbackColors = ['blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'];
   const payload = tabs.filter((tab) => tab.id !== undefined && (!tabIds || tabIds.has(tab.id))).map((tab) => ({
-    targetId: targets.get(tab.id), tabId: tab.id, windowId: tab.windowId, index: tab.index, pinned: !!tab.pinned, active: !!tab.active, url: tab.url, title: tab.title, groupId: tab.groupId ?? -1,
+    targetId: targets.get(tab.id), tabId: tab.id, windowId: tab.windowId, index: tab.index, pinned: !!tab.pinned, active: !!tab.active, focused: focusedWindows.has(tab.windowId), url: tab.url, title: tab.title, groupId: tab.groupId ?? -1,
     groupTitle: tab.groupId > -1 ? `Group ${tab.groupId}` : null,
     groupColor: tab.groupId > -1 ? fallbackColors[tab.groupId % fallbackColors.length] : null,
     groupCollapsed: false,
@@ -113,6 +123,7 @@ chrome.tabs.onDetached.addListener(() => sendSnapshot());
 chrome.tabs.onUpdated.addListener(() => sendSnapshot());
 chrome.tabs.onActivated.addListener(() => sendSnapshot());
 chrome.tabs.onHighlighted.addListener(() => sendSnapshot());
+chrome.windows.onFocusChanged.addListener(() => sendSnapshot());
 chrome.tabs.onMoved.addListener(() => sendSnapshot());
 chrome.tabs.onReplaced.addListener(() => sendSnapshot());
 chrome.tabGroups?.onCreated?.addListener(() => sendSnapshot());

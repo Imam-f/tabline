@@ -9,6 +9,14 @@ import type { AppState, BrowserChoice, BrowserTab, Folder, Session, SessionSumma
 import { makeDemo } from './demo';
 
 const api = window.tabline;
+const launchPreferencesKey = 'tabline.launch-preferences';
+type LaunchPreferences = { browser?: 'helium' | 'chrome'; executable?: string };
+function readLaunchPreferences(): LaunchPreferences {
+  try { return JSON.parse(localStorage.getItem(launchPreferencesKey) || '{}'); } catch { return {}; }
+}
+function writeLaunchPreferences(preferences: LaunchPreferences) {
+  try { localStorage.setItem(launchPreferencesKey, JSON.stringify(preferences)); } catch {}
+}
 const clock = (time: number) => new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 const date = (time: number) => new Date(time).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
 const duration = (ms: number) => { const seconds = Math.max(0, Math.floor(ms / 1000)); return seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s` : `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`; };
@@ -62,8 +70,10 @@ export default function App() {
   const searchRef = useRef<HTMLInputElement>(null);
   const session = demo || archived || state.session;
   const isLive = !demo && !archived && state.status === 'live';
+  const canRestore = !!api && !demo && !!session && !isLive && (state.status === 'idle' || state.status === 'error');
   const sessionNow = session?.endedAt || now;
   const selected = session?.tabs.find((tab) => tab.id === selectedId) || null;
+  const currentTab = session?.tabs.filter((tab) => !tab.closedAt && tab.active).sort((a, b) => Number(!!b.focused) - Number(!!a.focused) || Number(b.lastActiveAt || 0) - Number(a.lastActiveAt || 0))[0] || null;
   const openTabs = session?.tabs.filter((tab) => !tab.closedAt).length || 0;
   const connections = session?.tabs.filter((tab) => tab.openerId && session.tabs.some((parent) => parent.id === tab.openerId)).length || 0;
   const filtered = useMemo(() => session?.tabs.filter((tab) => {
@@ -91,6 +101,9 @@ export default function App() {
   async function action(operation: () => Promise<unknown>, success?: string) {
     try { await operation(); if (success) setToast(success); } catch (error) { setToast(error instanceof Error ? error.message : 'Something went wrong. Please try again.'); }
   }
+  function focusTab(id: string) {
+    if (isLive && api) void action(() => api.focusTab(id));
+  }
   async function exportSession() {
     if (!session) return;
     if (api) { await action(async () => { if (await api.exportSession(session)) setToast('Session exported with thumbnails and tab connections.'); }); return; }
@@ -108,10 +121,11 @@ export default function App() {
     setSessions(nextSessions);
     setFolders(nextFolders);
   }
-  async function restoreSession(item: SessionSummary) {
+  async function restoreSessionById(id: string) {
     if (!api) return;
     await action(async () => {
-      const result = await api.restoreSession(item.id);
+      const preferences = readLaunchPreferences();
+      const result = await api.restoreSession(id, preferences);
       setState(result.state);
       setArchived(null);
       setDemo(null);
@@ -120,9 +134,11 @@ export default function App() {
       setQuery('');
       setFilter('all');
       const issues = result.skipped + result.failed;
-      setToast(`Restored ${result.opened} ${result.opened === 1 ? 'tab' : 'tabs'}${issues ? `; ${issues} could not be restored` : ''}${result.desktopFailed ? '; virtual desktop placement was unavailable' : ''}.`);
+       const browserWarning = result.warnings?.find((warning) => warning.startsWith('Saved browser '));
+       setToast(`Restored ${result.opened} ${result.opened === 1 ? 'tab' : 'tabs'}${issues ? `; ${issues} could not be restored` : ''}${result.desktopFailed ? '; virtual desktop placement was unavailable' : ''}${browserWarning ? `; ${browserWarning}` : ''}.`);
     });
   }
+  async function restoreSession(item: SessionSummary) { await restoreSessionById(item.id); }
   function exploreDemo() { setDemo(makeDemo()); setArchived(null); setSelectedId('react'); setPage('workspace'); setShowLaunch(false); setQuery(''); setFilter('all'); }
   function toggleFolder(id: string) { setCollapsedFolders((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
   function startCreateFolder() { setCreatingFolder(true); setCreatingSubfolder(null); setFolderName(''); setEditingFolderId(null); }
@@ -245,7 +261,7 @@ export default function App() {
 
     <div className="main-shell">
       <main>
-        <section className="page-heading"><div><h1>{page === 'sessions' ? 'Pick up the thread.' : 'Your browsing, connected.'}</h1></div><button className="button primary" onClick={() => setShowLaunch(true)} disabled={state.status === 'launching' || state.status === 'stopping'}><Plus size={17}/>New session</button></section>
+         <section className="page-heading"><div><h1>{page === 'sessions' ? 'Pick up the thread.' : 'Your browsing, connected.'}</h1></div><CurrentContext tab={currentTab} live={isLive}/><button className="button primary" onClick={() => setShowLaunch(true)} disabled={state.status === 'launching' || state.status === 'stopping'}><Plus size={17}/>New session</button></section>
 
         {page === 'sessions' ? <section className="sessions-panel">
           <div className="section-heading"><h2>Saved sessions</h2><div className="section-heading-actions"><span className="section-count">{sessions.length} {sessions.length === 1 ? 'session' : 'sessions'}</span>{api && (creatingFolder ? <div className="folder-edit folder-edit-inline"><input autoFocus aria-label="Folder name" value={folderName} placeholder="Folder name" onChange={(event) => setFolderName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') createFolder(); if (event.key === 'Escape') cancelCreateFolder(); }}/><button onClick={createFolder} aria-label="Create folder"><Check size={14}/></button><button onClick={cancelCreateFolder} aria-label="Cancel"><X size={14}/></button></div> : <button className="button secondary folder-new" onClick={startCreateFolder}><FolderPlus size={15}/>New folder</button>)}</div></div>
@@ -262,11 +278,11 @@ export default function App() {
           </div>
 
           <section className="timeline-panel">
-            <div className="session-bar"><div className="session-title"><span className={`session-symbol ${demo ? 'demo' : ''}`}>{demo ? <Sparkles size={17}/> : <Radio size={17}/>}</span><h2>{session?.name || 'Your next discovery starts here'}</h2>{demo ? <span className="badge demo-badge">DEMO</span> : isLive ? <span className="badge live-badge"><span className="tiny-dot green"/>LIVE</span> : session ? <span className="badge">SAVED</span> : null}</div><div className="session-actions">{session && <><span className="session-date">{date(session.startedAt)}</span><button className="icon-button" onClick={exportSession} aria-label="Export session" title="Export session as JSON"><ArrowDownToLine size={17}/></button></>}{isLive && <button className="button small stop-button" onClick={() => setShowStop(true)}><Square size={11} fill="currentColor"/>End session</button>}{(demo || archived) && api && <button className="icon-button" title="Return to current session" aria-label="Return to current session" onClick={() => { setDemo(null); setArchived(null); setSelectedId(null); }}><X size={17}/></button>}</div></div>
+             <div className="session-bar"><div className="session-title"><span className={`session-symbol ${demo ? 'demo' : ''}`}>{demo ? <Sparkles size={17}/> : <Radio size={17}/>}</span><h2>{session?.name || 'Your next discovery starts here'}</h2>{demo ? <span className="badge demo-badge">DEMO</span> : isLive ? <span className="badge live-badge"><span className="tiny-dot green"/>LIVE</span> : session ? <span className="badge">SAVED</span> : null}</div><div className="session-actions">{session && <><span className="session-date">{date(session.startedAt)}</span><button className="icon-button" onClick={exportSession} aria-label="Export session" title="Export session as JSON"><ArrowDownToLine size={17}/></button></>}{canRestore && <button className="button small restore-session-inline" onClick={() => restoreSessionById(session.id)}><RefreshCw size={13}/>Restore</button>}{isLive && <button className="button small stop-button" onClick={() => setShowStop(true)}><Square size={11} fill="currentColor"/>End session</button>}{(demo || archived) && api && <button className="icon-button" title="Return to current session" aria-label="Return to current session" onClick={() => { setDemo(null); setArchived(null); setSelectedId(null); }}><X size={17}/></button>}</div></div>
             <div className="timeline-toolbar"><div className="view-switch"><button className={view === 'timeline' ? 'selected' : ''} onClick={() => setView('timeline')}><Activity size={15}/>Timeline</button><button className={view === 'list' ? 'selected' : ''} onClick={() => setView('list')}><LayoutList size={15}/>Tab list</button></div><div className="toolbar-filters"><label className="search-field"><Search size={15}/><input ref={searchRef} aria-label="Search tabs" placeholder="Find a tab..." value={query} onChange={(event) => setQuery(event.target.value)}/>{query ? <button aria-label="Clear search" onClick={() => setQuery('')}><X size={12}/></button> : <kbd>⌘ K</kbd>}</label><div className="select-wrap"><select aria-label="Filter tabs" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="all">All tabs</option><option value="open">Open tabs</option><option value="closed">Closed tabs</option><option value="linked">Connected tabs</option></select><ChevronDown size={13}/></div></div></div>
             <div className={`timeline-content ${selected ? 'has-detail' : ''}`}>
               <div className="timeline-main">
-                 {!session || !session.tabs.length ? <div className="empty-state launch-empty"><div className="empty-illustration"><span/><span/><span/><GitBranch size={30}/></div><span className="eyebrow">FOLLOW YOUR CURIOSITY</span><h3>Big ideas start with a new tab.</h3><p>Launch Helium or Chrome and watch your browsing<br/>journey come together, one connection at a time.</p><button className="button primary" onClick={() => setShowLaunch(true)}><Plus size={16}/>Launch a browser</button><button className="text-button" onClick={exploreDemo}>Or take a look around with a demo <ArrowRight size={14}/></button></div> : !filtered.length ? <div className="empty-state"><Search size={30}/><h3>No tabs on this trail.</h3><p>Try a different search or show all tabs.</p><button className="button secondary" onClick={() => { setQuery(''); setFilter('all'); }}>Clear filters</button></div> : view === 'timeline' ? <Timeline tabs={filtered} allTabs={session.tabs} session={session} now={sessionNow} selectedId={selectedId} onSelect={setSelectedId} thumbnails={showThumbnails} connections={showConnections} zoom={zoom}/> : <div className="tab-list"><div className="tab-list-heading"><span>PAGE</span><span>OPENED</span><span>DURATION</span><span>STATUS</span></div>{filtered.map((tab) => <button key={tab.id} className={`tab-list-row ${tab.id === selectedId ? 'selected' : ''}`} onClick={() => setSelectedId(tab.id)}><div className="tab-list-title"><SiteIcon tab={tab}/><div><strong>{tab.title}</strong><span>{domain(tab.originalUrl || tab.url)}</span></div></div><span>{clock(tab.openedAt)}</span><span>{duration((tab.closedAt || sessionNow) - tab.openedAt)}</span><span className={`status-label ${tab.closedAt ? 'closed' : tab.frozen ? 'frozen' : 'open'}`}><span className="tiny-dot"/>{tab.closedAt ? 'Closed' : tab.frozen ? 'Frozen' : 'Open'}</span></button>)}</div>}
+                  {!session || !session.tabs.length ? <div className="empty-state launch-empty"><div className="empty-illustration"><span/><span/><span/><GitBranch size={30}/></div><span className="eyebrow">FOLLOW YOUR CURIOSITY</span><h3>Big ideas start with a new tab.</h3><p>Launch Helium or Chrome and watch your browsing<br/>journey come together, one connection at a time.</p><button className="button primary" onClick={() => setShowLaunch(true)}><Plus size={16}/>Launch a browser</button><button className="text-button" onClick={exploreDemo}>Or take a look around with a demo <ArrowRight size={14}/></button></div> : !filtered.length ? <div className="empty-state"><Search size={30}/><h3>No tabs on this trail.</h3><p>Try a different search or show all tabs.</p><button className="button secondary" onClick={() => { setQuery(''); setFilter('all'); }}>Clear filters</button></div> : view === 'timeline' ? <Timeline tabs={filtered} allTabs={session.tabs} session={session} now={sessionNow} selectedId={selectedId} onSelect={setSelectedId} onFocus={focusTab} thumbnails={showThumbnails} connections={showConnections} zoom={zoom}/> : <TabList tabs={filtered} now={sessionNow} selectedId={selectedId} currentTabId={currentTab?.id || null} onSelect={setSelectedId} onFocus={focusTab}/>} 
                 <div className="timeline-footer"><div className="legend"><span><i className="legend-line open"/>Open tab</span><span><i className="legend-line closed"/>Closed tab</span><button className={!showConnections ? 'muted' : ''} onClick={() => setShowConnections(!showConnections)} title="Toggle opener connections"><GitBranch size={13}/>Opened from</button></div><div className="zoom-controls"><button className={!showThumbnails ? 'muted' : ''} onClick={() => setShowThumbnails(!showThumbnails)} title="Toggle thumbnails" aria-label="Toggle thumbnails" aria-pressed={showThumbnails}><Image size={15}/></button><span className="control-divider"/><button onClick={() => setZoom(Math.max(1, zoom - 0.5))} disabled={zoom === 1} aria-label="Zoom out"><Minus size={14}/></button><span>{Math.round(zoom * 100)}%</span><button onClick={() => setZoom(Math.min(4, zoom + 0.5))} disabled={zoom === 4} aria-label="Zoom in"><Plus size={14}/></button><button onClick={() => setZoom(1)} aria-label="Fit timeline" title="Fit timeline"><Maximize2 size={13}/></button></div></div>
               </div>
               {selected && session && <TabDetail tab={selected} session={session} now={sessionNow} onClose={() => setSelectedId(null)} onSelect={setSelectedId} isLive={isLive} onFocus={() => action(() => api!.focusTab(selected.id))} onCapture={() => action(async () => { const image = await api!.capture(selected.id); if (!image) throw new Error('This tab is no longer available for capture.'); }, 'Thumbnail refreshed.')} onCloseTab={() => action(() => api!.closeTab(selected.id), 'Tab closed. Its place in your timeline is saved.')}/>}
@@ -288,11 +304,27 @@ function Stat({ icon, label, value, detail, color }: { icon: React.ReactNode; la
   return <div className="stat-card"><div className="stat-top"><span>{label}</span><span className={`stat-icon ${color}`}>{icon}</span></div><div className="stat-value">{value}<span className="stat-detail">{detail}</span></div></div>;
 }
 
+function CurrentContext({ tab, live }: { tab: BrowserTab | null; live: boolean }) {
+  const desktop = tab?.desktopId && tab.desktopId !== 'unknown' ? tab.desktopId : null;
+  const desktopLabel = desktop ? (desktop.length > 14 ? `${desktop.slice(0, 8)}...` : desktop) : 'Unavailable';
+  return <div className={`current-context ${tab ? '' : 'empty'}`} title={desktop || undefined}><span className="context-icon"><Monitor size={16}/></span><div className="context-copy"><span className="context-label"><span className={`tiny-dot ${live && tab ? 'green' : 'gray'}`}/>{live ? 'CURRENT BROWSER' : 'VIEWING'}</span><strong>{tab?.title || 'No active tab'}</strong><small>{tab ? domain(tab.originalUrl || tab.url) : 'Focus a browser window to see its state'}</small></div><div className="context-state"><span>Desktop {desktopLabel}</span><span>{tab?.windowId ? `Window ${tab.windowId}` : 'No window'}</span></div></div>;
+}
+
+function TabList({ tabs, now, selectedId, currentTabId, onSelect, onFocus }: { tabs: BrowserTab[]; now: number; selectedId: string | null; currentTabId: string | null; onSelect: (id: string) => void; onFocus: (id: string) => void }) {
+  const groups = Array.from(tabs.reduce((map, tab) => {
+    const key = `${tab.desktopId || 'unknown'}::${tab.windowId || 'unknown'}`;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(tab);
+    return map;
+  }, new Map<string, BrowserTab[]>()).entries());
+  return <div className="tab-list"><div className="tab-list-heading"><span>PAGE</span><span>OPENED</span><span>DURATION</span><span>STATUS</span></div>{groups.map(([key, group]) => { const [desktop, window] = key.split('::'); const current = group.some((tab) => tab.id === currentTabId); return <Fragment key={key}><div className={`tab-list-separator ${current ? 'current' : ''}`} title={desktop === 'unknown' ? undefined : desktop}><span className="group-mark"><Monitor size={12}/></span><strong>{desktop === 'unknown' ? 'Virtual desktop unavailable' : `Virtual desktop ${desktop.length > 14 ? `${desktop.slice(0, 8)}...` : desktop}`}</strong><span className="group-separator">/</span><span>Window {window === 'unknown' ? 'unknown' : window}</span><span className="group-count">{group.length} {group.length === 1 ? 'tab' : 'tabs'}</span>{current && <span className="current-group-label">CURRENT</span>}</div>{group.map((tab) => <button key={tab.id} className={`tab-list-row ${tab.id === selectedId ? 'selected' : ''} ${tab.id === currentTabId ? 'current' : ''}`} onClick={() => onSelect(tab.id)} onDoubleClick={() => { if (!tab.closedAt) onFocus(tab.id); }}><div className="tab-list-title"><SiteIcon tab={tab}/><div><strong>{tab.title}</strong><span>{domain(tab.originalUrl || tab.url)}</span></div></div><span>{clock(tab.openedAt)}</span><span>{duration((tab.closedAt || now) - tab.openedAt)}</span><span className={`status-label ${tab.closedAt ? 'closed' : tab.frozen ? 'frozen' : 'open'}`}><span className="tiny-dot"/>{tab.closedAt ? 'Closed' : tab.frozen ? 'Frozen' : 'Open'}</span></button>)}</Fragment>; })}</div>;
+}
+
 function SessionRow({ item, options, onMove, onView, onRestore, disabled, indent, dragging, onDragStart, onDragEnd, editing, sessionName, onSessionNameChange, onRenameStart, onRenameSave, onRenameCancel, onDelete }: { item: SessionSummary; options: { folder: Folder; depth: number }[]; onMove: (sessionId: string, folderId: string | null) => void; onView: () => void; onRestore: () => void; disabled: boolean; indent: number; dragging: boolean; onDragStart: (event: React.DragEvent) => void; onDragEnd: () => void; editing: boolean; sessionName: string; onSessionNameChange: (value: string) => void; onRenameStart: () => void; onRenameSave: () => void; onRenameCancel: () => void; onDelete: () => void }) {
   return <div className={`saved-session ${dragging ? 'dragging' : ''} ${editing ? 'editing' : ''}`} style={{ paddingLeft: indent }}>{editing ? <div className="session-rename"><input autoFocus aria-label="Rename session" value={sessionName} onChange={(event) => onSessionNameChange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') onRenameSave(); if (event.key === 'Escape') onRenameCancel(); }}/><button onClick={onRenameSave} aria-label="Save session name"><Check size={14}/></button><button onClick={onRenameCancel} aria-label="Cancel"><X size={14}/></button></div> : <><button className="saved-session-view" draggable onClick={onView} onDragStart={onDragStart} onDragEnd={onDragEnd}><span className="saved-session-icon"><FolderClock size={22}/></span><div><strong>{item.name}</strong><span>{date(item.startedAt)} · {clock(item.startedAt)} · {item.browser === 'helium' ? 'Helium' : 'Chrome'}</span></div><span>{item.tabCount} tabs</span><ArrowRight size={18}/></button><label className="saved-session-folder" title="Move to folder"><FolderOpen size={13}/><span className="select-wrap"><select aria-label={`Move ${item.name} to folder`} value={item.folderId || ''} onChange={(event) => onMove(item.id, event.target.value || null)}><option value="">Unfiled</option>{options.map(({ folder, depth: optionDepth }) => <option key={folder.id} value={folder.id}>{'\u00A0'.repeat(optionDepth * 2)}{folder.name}</option>)}</select><ChevronDown size={13}/></span></label><div className="saved-session-actions"><button onClick={onRenameStart} aria-label={`Rename ${item.name}`} title="Rename session"><Pencil size={13}/></button><button onClick={onDelete} aria-label={`Delete ${item.name}`} title="Delete session"><Trash2 size={13}/></button></div><button className="button secondary restore-session" disabled={disabled} onClick={onRestore}><RefreshCw size={14}/>Restore</button></>}</div>;
 }
 
-function Timeline({ tabs, allTabs, session, now, selectedId, onSelect, thumbnails, connections, zoom }: { tabs: BrowserTab[]; allTabs: BrowserTab[]; session: Session; now: number; selectedId: string | null; onSelect: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number }) {
+function Timeline({ tabs, allTabs, session, now, selectedId, onSelect, onFocus, thumbnails, connections, zoom }: { tabs: BrowserTab[]; allTabs: BrowserTab[]; session: Session; now: number; selectedId: string | null; onSelect: (id: string) => void; onFocus: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const groups = Array.from(tabs.reduce((map, tab) => {
     const key = `${tab.desktopId || 'unknown'}::${tab.windowId || 'unknown'}`;
@@ -308,10 +340,10 @@ function Timeline({ tabs, allTabs, session, now, selectedId, onSelect, thumbnail
     if (next.has(key)) next.delete(key); else next.add(key);
     return next;
   });
-  return <TimelineCanvas groups={groups} allTabs={allTabs} session={session} now={now} selectedId={selectedId} onSelect={onSelect} thumbnails={thumbnails} connections={connections} zoom={zoom} collapsed={collapsed} onToggle={toggle}/>;
+  return <TimelineCanvas groups={groups} allTabs={allTabs} session={session} now={now} selectedId={selectedId} onSelect={onSelect} onFocus={onFocus} thumbnails={thumbnails} connections={connections} zoom={zoom} collapsed={collapsed} onToggle={toggle}/>;
 }
 
-function TimelineCanvas({ groups, allTabs, session, now, selectedId, onSelect, thumbnails, connections, zoom, collapsed, onToggle }: { groups: { key: string; desktop: string; window: string; tabs: BrowserTab[] }[]; allTabs: BrowserTab[]; session: Session; now: number; selectedId: string | null; onSelect: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number; collapsed: Set<string>; onToggle: (key: string) => void }) {
+function TimelineCanvas({ groups, allTabs, session, now, selectedId, onSelect, onFocus, thumbnails, connections, zoom, collapsed, onToggle }: { groups: { key: string; desktop: string; window: string; tabs: BrowserTab[] }[]; allTabs: BrowserTab[]; session: Session; now: number; selectedId: string | null; onSelect: (id: string) => void; onFocus: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number; collapsed: Set<string>; onToggle: (key: string) => void }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(700);
   useEffect(() => {
@@ -369,7 +401,7 @@ function TimelineCanvas({ groups, allTabs, session, now, selectedId, onSelect, t
       const barWidth = Math.max(8, x(tab.closedAt || now) - left);
       const showImage = thumbnails && barWidth > 160;
       const number = allTabs.findIndex((item) => item.id === tab.id) + 1;
-       return <div className={`timeline-row ${selectedId === tab.id ? 'selected' : ''}`} key={tab.id} style={{ height: rowHeight }}><span className="row-number">{String(number).padStart(2, '0')}</span><button title={`${tab.title}\n${tab.originalUrl || tab.url}\nOpened ${clock(tab.openedAt)}${tab.closedAt ? ` · Closed ${clock(tab.closedAt)}` : ' · Still open'}${tab.frozen ? '\nFrozen snapshot' : ''}${tab.groupTitle ? `\nGroup: ${tab.groupTitle}` : ''}`} aria-label={`View ${tab.title}`} className={`tab-bar ${siteColor(tab)} ${tab.closedAt ? 'is-closed' : ''} ${tab.frozen ? 'is-frozen' : ''} ${selectedId === tab.id ? 'is-selected' : ''} ${barWidth < 120 ? 'compact' : ''}`} style={{ left, width: barWidth }} onClick={() => onSelect(tab.id)}>{showImage && <span className="bar-thumbnail">{tab.thumbnail ? <img src={tab.thumbnail} alt={`Thumbnail of ${tab.title}`}/> : <Globe2 size={23}/>}</span>}<span className="bar-content"><span className="bar-title"><SiteIcon tab={tab} size="small"/><strong>{tab.title}</strong>{tab.frozen && <span className="group-chip frozen-chip">FROZEN</span>}{tab.groupTitle && <span className="group-chip" style={{ '--group-color': tab.groupColor || '#9ca8bb' } as React.CSSProperties}>{tab.groupTitle}</span>}{tab.closedAt && barWidth > 200 && <X size={11}/>}</span><span className="bar-subtitle">{domain(tab.originalUrl || tab.url)}<span>·</span>{duration((tab.closedAt || now) - tab.openedAt)}</span></span>{!tab.closedAt && <span className="bar-end-dot"/>}</button>{barWidth < 120 && <button className="overflow-tab-label" style={{ left: Math.min(left + barWidth + 7, width - 115) }} onClick={() => onSelect(tab.id)}>{siteName(tab)}</button>}</div>;
+        return <div className={`timeline-row ${selectedId === tab.id ? 'selected' : ''}`} key={tab.id} style={{ height: rowHeight }}><span className="row-number">{String(number).padStart(2, '0')}</span><button title={`${tab.title}\n${tab.originalUrl || tab.url}\nOpened ${clock(tab.openedAt)}${tab.closedAt ? ` · Closed ${clock(tab.closedAt)}` : ' · Still open'}${tab.frozen ? '\nFrozen snapshot' : ''}${tab.groupTitle ? `\nGroup: ${tab.groupTitle}` : ''}`} aria-label={`View ${tab.title}`} className={`tab-bar ${siteColor(tab)} ${tab.closedAt ? 'is-closed' : ''} ${tab.frozen ? 'is-frozen' : ''} ${selectedId === tab.id ? 'is-selected' : ''} ${barWidth < 120 ? 'compact' : ''}`} style={{ left, width: barWidth }} onClick={() => onSelect(tab.id)} onDoubleClick={() => { if (!tab.closedAt) onFocus(tab.id); }}>{showImage && <span className="bar-thumbnail">{tab.thumbnail ? <img src={tab.thumbnail} alt={`Thumbnail of ${tab.title}`}/> : <Globe2 size={23}/>}</span>}<span className="bar-content"><span className="bar-title"><SiteIcon tab={tab} size="small"/><strong>{tab.title}</strong>{tab.frozen && <span className="group-chip frozen-chip">FROZEN</span>}{tab.groupTitle && <span className="group-chip" style={{ '--group-color': tab.groupColor || '#9ca8bb' } as React.CSSProperties}>{tab.groupTitle}</span>}{tab.closedAt && barWidth > 200 && <X size={11}/>}</span><span className="bar-subtitle">{domain(tab.originalUrl || tab.url)}<span>·</span>{duration((tab.closedAt || now) - tab.openedAt)}</span></span>{!tab.closedAt && <span className="bar-end-dot"/>}</button>{barWidth < 120 && <button className="overflow-tab-label" style={{ left: Math.min(left + barWidth + 7, width - 115) }} onClick={() => onSelect(tab.id)} onDoubleClick={() => { if (!tab.closedAt) onFocus(tab.id); }}>{siteName(tab)}</button>}</div>;
     })}</Fragment>)}</div>
     <div className="timeline-start-note" style={{ left: padding }}><span/>The start of something</div>
   </div></div>;
@@ -412,18 +444,20 @@ function Modal({ title, subtitle, children, onClose }: { title: string; subtitle
 }
 
 function LaunchDialog({ onClose, onLaunch, onDemo, running }: { onClose: () => void; onLaunch: (options: { browser: 'helium' | 'chrome'; executable?: string; url: string; name: string }) => Promise<void>; onDemo: () => void; running: boolean }) {
+  const preferences = useRef<LaunchPreferences | null>(null);
+  if (!preferences.current) preferences.current = readLaunchPreferences();
   const [browsers, setBrowsers] = useState<BrowserChoice[]>([]);
-  const [browser, setBrowser] = useState<'helium' | 'chrome'>('helium');
-  const [executable, setExecutable] = useState('');
+  const [browser, setBrowser] = useState<'helium' | 'chrome'>(preferences.current.browser || 'helium');
+  const [executable, setExecutable] = useState(preferences.current.executable || '');
   const [name, setName] = useState('A new rabbit hole');
   const [url, setUrl] = useState('https://www.google.com');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [advanced, setAdvanced] = useState(false);
-  useEffect(() => { api?.getBrowsers().then((items) => { setBrowsers(items); if (!items.find((item) => item.id === 'helium')?.path && items.find((item) => item.id === 'chrome')?.path) setBrowser('chrome'); }).catch((err) => setError(err.message)); }, []);
+  useEffect(() => { api?.getBrowsers().then((items) => { setBrowsers(items); const saved = preferences.current; const savedUsable = !!saved?.executable || !!items.find((item) => item.id === saved?.browser)?.path; if (!savedUsable) setBrowser(items.find((item) => item.id === 'helium')?.path ? 'helium' : 'chrome'); }).catch((err) => setError(err.message)); }, []);
   return <Modal title="Where will curiosity take you?" subtitle="Start a fresh browser session. We’ll connect the dots." onClose={busy ? () => {} : onClose}>
     {!api ? <div className="desktop-notice"><Monitor size={19}/><div><strong>You’re in the web preview.</strong><p>Browser launching is available in the Electron desktop app. Run <code>npm run dev</code> from this project to connect a local browser.</p></div></div> : running ? <div className="desktop-notice"><Radio size={19}/><div><strong>A session is already running.</strong><p>End your current session before starting a new one.</p></div></div> : null}
-    <form onSubmit={async (event) => { event.preventDefault(); setBusy(true); setError(''); try { await onLaunch({ browser, executable: executable || undefined, url, name }); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to launch the browser.'); } finally { setBusy(false); } }}>
+    <form onSubmit={async (event) => { event.preventDefault(); setBusy(true); setError(''); try { writeLaunchPreferences({ browser, executable }); await onLaunch({ browser, executable: executable || undefined, url, name }); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to launch the browser.'); } finally { setBusy(false); } }}>
       <label className="field-label">YOUR BROWSER</label><div className="browser-options">{(['helium', 'chrome'] as const).map((item) => <button type="button" key={item} className={`browser-option ${browser === item ? 'selected' : ''}`} onClick={() => { setBrowser(item); setExecutable(''); }}><span className={`browser-logo ${item}`}>{item === 'helium' ? <span>He</span> : <Globe2 size={24}/>}</span><span><strong>{item === 'helium' ? 'Helium' : 'Google Chrome'}</strong><small>{api ? browsers.find((b) => b.id === item)?.path ? 'Detected on your device' : 'Choose an executable' : 'Chromium-powered'}</small></span><span className="radio-circle">{browser === item && <span/>}</span></button>)}</div>
       <label className="field-label" htmlFor="session-name">SESSION NAME</label><input id="session-name" className="form-input" value={name} onChange={(event) => setName(event.target.value)} placeholder="A new rabbit hole" maxLength={80}/>
       <label className="field-label" htmlFor="start-url">STARTING PAGE</label><input id="start-url" className="form-input" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://www.google.com"/>

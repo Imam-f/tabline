@@ -16,6 +16,7 @@ export interface BrowserTab {
   tabIndex?: number | null;
   pinned?: boolean;
   active?: boolean;
+  focused?: boolean;
   lastActiveAt?: number | null;
   inactiveScreenshotAt?: number | null;
   frozen?: boolean;
@@ -65,7 +66,7 @@ export interface TablineAPI {
   freezeAllTabs(): Promise<{ items: Array<{ targetId: string; shortUrl: string; slug: string }>; skipped: Array<{ reason: string }>; windows: number }>;
   listSessions(): Promise<SessionSummary[]>;
   loadSession(id: string): Promise<Session>;
-  restoreSession(id: string, options?: { executable?: string }): Promise<RestoreResult>;
+  restoreSession(id: string, options?: { browser?: 'helium' | 'chrome'; executable?: string }): Promise<RestoreResult>;
   exportSession(session: Session): Promise<boolean>;
   listFolders(): Promise<Folder[]>;
   createFolder(name: string, parentId?: string | null): Promise<Folder>;
