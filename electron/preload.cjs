@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('tabline', {
   deleteFolder: (id) => ipcRenderer.invoke('folder:delete', id),
   setFolderParent: (id, parentId) => ipcRenderer.invoke('folder:move', id, parentId),
   setSessionFolder: (sessionId, folderId) => ipcRenderer.invoke('session:set-folder', sessionId, folderId),
+  reorderSession: (sessionId, targetSessionId, before) => ipcRenderer.invoke('session:reorder', sessionId, targetSessionId, before),
   renameSession: (id, name) => ipcRenderer.invoke('session:rename', id, name),
   deleteSession: (id) => ipcRenderer.invoke('session:delete', id),
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),

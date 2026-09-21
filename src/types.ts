@@ -49,7 +49,7 @@ export interface AppState {
 }
 export interface BrowserChoice { id: 'helium' | 'chrome'; name: string; path: string | null }
 export interface LaunchOptions { browser: 'helium' | 'chrome'; executable?: string; url: string; name: string }
-export interface SessionSummary { id: string; name: string; startedAt: number; endedAt: number | null; browser: string; tabCount: number; folderId: string | null }
+export interface SessionSummary { id: string; name: string; startedAt: number; endedAt: number | null; browser: string; tabCount: number; folderId: string | null; order: number | null }
 export interface Folder { id: string; name: string; createdAt: number; parentId: string | null }
 export interface RestoreResult { state: AppState; requested: number; opened: number; skipped: number; failed: number; desktopFailed: number; groupsRestored: boolean; warnings: string[] }
 export interface TablineAPI {
@@ -66,7 +66,7 @@ export interface TablineAPI {
   freezeAllTabs(): Promise<{ items: Array<{ targetId: string; shortUrl: string; slug: string }>; skipped: Array<{ reason: string }>; windows: number }>;
   listSessions(): Promise<SessionSummary[]>;
   loadSession(id: string): Promise<Session>;
-  restoreSession(id: string, options?: { browser?: 'helium' | 'chrome'; executable?: string }): Promise<RestoreResult>;
+  restoreSession(id: string, options?: { browser?: 'helium' | 'chrome'; executable?: string; at?: number }): Promise<RestoreResult>;
   exportSession(session: Session): Promise<boolean>;
   listFolders(): Promise<Folder[]>;
   createFolder(name: string, parentId?: string | null): Promise<Folder>;
@@ -74,6 +74,7 @@ export interface TablineAPI {
   deleteFolder(id: string): Promise<void>;
   setFolderParent(id: string, parentId: string | null): Promise<Folder>;
   setSessionFolder(sessionId: string, folderId: string | null): Promise<void>;
+  reorderSession(sessionId: string, targetSessionId: string, before: boolean): Promise<void>;
   renameSession(id: string, name: string): Promise<void>;
   deleteSession(id: string): Promise<void>;
   minimizeWindow(): Promise<void>;

@@ -119,6 +119,16 @@ test('builds a restore plan from tabs that were open at shutdown in strip order'
   assert.equal(plan.windows[0].tabs[1].openerSourceId, 'first');
 });
 
+test('builds a restore plan from the tabs open at a timeline position', () => {
+  const session = { id: 'source', endedAt: 300, tabs: [
+    { id: 'early', url: 'https://early.example', openedAt: 10, closedAt: 150, openAtEnd: false, extensionWindowId: 1, tabIndex: 0 },
+    { id: 'late', url: 'https://late.example', openedAt: 200, closedAt: 400, openAtEnd: true, extensionWindowId: 1, tabIndex: 1 },
+    { id: 'root', url: 'https://root.example', openedAt: 20, closedAt: 400, openAtEnd: true, extensionWindowId: 1, tabIndex: 2 },
+  ] };
+  const plan = buildRestorePlan(session, 250);
+  assert.deepEqual(plan.windows[0].tabs.map((tab) => tab.sourceId), ['late', 'root']);
+});
+
 test('tracks tab strip moves without duplicating unchanged order history', () => {
   const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-order-')));
   controller.session = { tabs: [{ id: 'target', url: 'https://example.com', title: 'Example', tabIndex: null, extensionWindowId: null, orderHistory: [], groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [] }] };
@@ -130,6 +140,25 @@ test('tracks tab strip moves without duplicating unchanged order history', () =>
   assert.equal(controller.session.tabs[0].active, false);
   assert.equal(controller.session.tabs[0].orderHistory.length, 2);
   clearTimeout(controller.persistTimer);
+});
+
+test('reorders saved sessions and persists their per-folder order', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { randomUUID } = require('node:crypto');
+  const dataDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'tabline-session-order-'));
+  const sessionsDir = path.join(dataDir, 'sessions');
+  const folderId = randomUUID();
+  const ids = [randomUUID(), randomUUID(), randomUUID()];
+  const controller = new BrowserController(dataDir);
+  [300, 200, 100].forEach((startedAt, index) => fs.writeFileSync(path.join(sessionsDir, `${ids[index]}.json`), JSON.stringify({ id: ids[index], name: `Session ${index + 1}`, startedAt, endedAt: startedAt + 10, browser: 'chrome', folderId, tabs: [] })));
+
+  controller.reorderSession(ids[2], ids[0], true);
+
+  assert.deepEqual(controller.listSessions().map((session) => session.id), [ids[2], ids[0], ids[1]]);
+  assert.deepEqual(controller.listSessions().map((session) => session.order), [0, 1, 2]);
+  const reloaded = new BrowserController(dataDir);
+  assert.deepEqual(reloaded.listSessions().map((session) => session.id), [ids[2], ids[0], ids[1]]);
 });
 
 test('moves correlated restored windows to their saved virtual desktops', async () => {

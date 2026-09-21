@@ -48,6 +48,7 @@ else {
     ipcMain.handle('folder:delete', (_event, id) => controller.deleteFolder(id));
     ipcMain.handle('folder:move', (_event, id, parentId) => controller.setFolderParent(id, parentId));
     ipcMain.handle('session:set-folder', (_event, sessionId, folderId) => controller.setSessionFolder(sessionId, folderId));
+    ipcMain.handle('session:reorder', (_event, sessionId, targetSessionId, before) => controller.reorderSession(sessionId, targetSessionId, before));
     ipcMain.handle('session:rename', (_event, id, name) => controller.renameSession(id, name));
     ipcMain.handle('session:delete', (_event, id) => controller.deleteSession(id));
     ipcMain.handle('window:minimize', (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());

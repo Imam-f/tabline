@@ -80,9 +80,11 @@ function restoreUrl(input) {
   try { const url = new URL(input); return ['http:', 'https:'].includes(url.protocol) ? url.href : null; } catch { return null; }
 }
 
-function buildRestorePlan(session) {
+function buildRestorePlan(session, at = null) {
   const hasOpenSnapshot = session.tabs.some((tab) => typeof tab.openAtEnd === 'boolean');
-  let candidates = hasOpenSnapshot
+  let candidates = Number.isFinite(at)
+    ? session.tabs.filter((tab) => tab.openedAt <= at && (!tab.closedAt || tab.closedAt > at || (at >= session.endedAt && tab.openAtEnd !== false)))
+    : hasOpenSnapshot
     ? session.tabs.filter((tab) => tab.openAtEnd)
     : session.tabs.filter((tab) => session.endedAt && tab.closedAt && Math.abs(tab.closedAt - session.endedAt) < 2000);
   if (!candidates.length && !hasOpenSnapshot) candidates = session.tabs;
@@ -97,6 +99,15 @@ function buildRestorePlan(session) {
   }
   for (const window of windows.values()) window.tabs.sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.index - b.index || a.openedAt - b.openedAt);
   return { sourceSessionId: session.id, windows: [...windows.values()].filter((window) => window.tabs.length), requested: candidates.length, skipped };
+}
+
+function compareSavedSessions(a, b) {
+  const aOrder = Number.isInteger(a.order) ? a.order : null;
+  const bOrder = Number.isInteger(b.order) ? b.order : null;
+  if (aOrder === null && bOrder !== null) return -1;
+  if (aOrder !== null && bOrder === null) return 1;
+  if (aOrder !== null && bOrder !== null && aOrder !== bOrder) return aOrder - bOrder;
+  return b.startedAt - a.startedAt;
 }
 
 class BrowserController extends EventEmitter {
@@ -176,9 +187,9 @@ class BrowserController extends EventEmitter {
     return fs.readdirSync(path.join(this.dataDir, 'sessions')).filter((name) => name.endsWith('.json')).flatMap((name) => {
       try {
         const session = JSON.parse(fs.readFileSync(path.join(this.dataDir, 'sessions', name), 'utf8'));
-        return [{ id: session.id, name: session.name, startedAt: session.startedAt, endedAt: session.endedAt, browser: session.browser, tabCount: session.tabs.length, folderId: session.folderId || null }];
+        return [{ id: session.id, name: session.name, startedAt: session.startedAt, endedAt: session.endedAt, browser: session.browser, tabCount: session.tabs.length, folderId: session.folderId || null, order: Number.isInteger(session.order) ? session.order : null }];
       } catch { return []; }
-    }).sort((a, b) => b.startedAt - a.startedAt);
+    }).sort((a, b) => a.folderId === b.folderId ? compareSavedSessions(a, b) : b.startedAt - a.startedAt);
   }
 
   foldersFile() { return path.join(this.dataDir, 'folders.json'); }
@@ -254,8 +265,42 @@ class BrowserController extends EventEmitter {
     if (folderId && !/^[a-f0-9-]{36}$/.test(folderId)) throw new Error('Invalid folder ID');
     const full = path.join(this.dataDir, 'sessions', `${sessionId}.json`);
     const session = JSON.parse(fs.readFileSync(full, 'utf8'));
-    session.folderId = folderId || null;
+    const nextFolderId = folderId || null;
+    if ((session.folderId || null) !== nextFolderId) session.order = null;
+    session.folderId = nextFolderId;
     fs.writeFileSync(full, JSON.stringify(session));
+  }
+
+  reorderSession(sessionId, targetSessionId, before) {
+    if (!/^[a-f0-9-]{36}$/.test(sessionId) || !/^[a-f0-9-]{36}$/.test(targetSessionId)) throw new Error('Invalid session ID');
+    if (sessionId === targetSessionId) return;
+    const dir = path.join(this.dataDir, 'sessions');
+    const records = fs.readdirSync(dir).filter((name) => name.endsWith('.json')).flatMap((name) => {
+      try {
+        const file = path.join(dir, name);
+        return [{ file, session: JSON.parse(fs.readFileSync(file, 'utf8')) }];
+      } catch { return []; }
+    });
+    const source = records.find((record) => record.session.id === sessionId);
+    const target = records.find((record) => record.session.id === targetSessionId);
+    if (!source || !target) throw new Error('Session not found.');
+
+    const sourceFolderId = source.session.folderId || null;
+    const targetFolderId = target.session.folderId || null;
+    source.session.folderId = targetFolderId;
+    const targetItems = records.filter((record) => (record.session.folderId || null) === targetFolderId && record.session.id !== sessionId).sort((a, b) => compareSavedSessions(a.session, b.session));
+    const targetIndex = targetItems.findIndex((record) => record.session.id === targetSessionId);
+    targetItems.splice(Math.max(0, targetIndex + (before ? 0 : 1)), 0, source);
+    targetItems.forEach((record, index) => { record.session.order = index; });
+
+    if (sourceFolderId !== targetFolderId) {
+      records.filter((record) => (record.session.folderId || null) === sourceFolderId && record.session.id !== sessionId).sort((a, b) => compareSavedSessions(a.session, b.session)).forEach((record, index) => { record.session.order = index; });
+    }
+    const changed = new Set(sourceFolderId === targetFolderId ? targetItems : [...targetItems, ...records.filter((record) => (record.session.folderId || null) === sourceFolderId && record.session.id !== sessionId)]);
+    for (const record of changed) {
+      fs.writeFileSync(`${record.file}.tmp`, JSON.stringify(record.session));
+      fs.renameSync(`${record.file}.tmp`, record.file);
+    }
   }
 
   renameSession(id, name) {
@@ -753,7 +798,7 @@ class BrowserController extends EventEmitter {
 
   async restoreSession(id, options = {}) {
     const saved = this.loadSession(id);
-    const plan = buildRestorePlan(saved);
+    const plan = buildRestorePlan(saved, options.at);
     if (!plan.windows.length) throw new Error('This session has no restorable web tabs.');
     let browser = options.browser === 'chrome' || options.browser === 'helium' ? options.browser : saved.browser;
     let executable = options.executable;
