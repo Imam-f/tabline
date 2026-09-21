@@ -8,6 +8,17 @@ const http = require('node:http');
 const { CDP } = require('./cdp.cjs');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const bridgeOrigin = 'http://127.0.0.1:17637';
+const inactivityScreenshotAfter = 5 * 60 * 1000;
+const inactivityFreezeAfter = 10 * 60 * 1000;
+
+function freezableUrl(url) {
+  try { const parsed = new URL(url); return ['http:', 'https:'].includes(parsed.protocol) && parsed.origin !== bridgeOrigin; } catch { return false; }
+}
+
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+}
 
 function browserCandidates(platform = process.platform, env = process.env) {
   const local = env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
@@ -40,10 +51,10 @@ function validStartUrl(input) {
 }
 
 function upsertTarget(session, info, now = Date.now()) {
-  if (info.type !== 'page') return null;
+  if (info.type !== 'page' || info.url?.startsWith('chrome-extension://')) return null;
   let tab = session.tabs.find((item) => item.id === info.targetId);
   if (!tab) {
-    tab = { id: info.targetId, title: info.title || 'New tab', url: info.url || 'about:blank', openedAt: now, closedAt: null, openAtEnd: true, openerId: info.openerId || null, windowId: info.windowId || null, desktopId: info.desktopId || 'unknown', windowHistory: [], extensionTabId: null, extensionWindowId: null, tabIndex: null, pinned: false, active: false, orderHistory: [], groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [], thumbnail: null, thumbnailAt: null, navigations: [] };
+    tab = { id: info.targetId, title: info.title || 'New tab', url: info.url || 'about:blank', openedAt: now, closedAt: null, openAtEnd: true, openerId: info.openerId || null, windowId: info.windowId || null, desktopId: info.desktopId || 'unknown', windowHistory: [], extensionTabId: null, extensionWindowId: null, tabIndex: null, pinned: false, active: false, lastActiveAt: null, inactiveScreenshotAt: null, frozen: false, frozenSlug: null, originalUrl: null, orderHistory: [], groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [], thumbnail: null, thumbnailAt: null, navigations: [] };
     session.tabs.push(tab);
   }
   if (info.openerId) tab.openerId = info.openerId;
@@ -87,12 +98,16 @@ class BrowserController extends EventEmitter {
   constructor(dataDir, extensionPath = path.join(__dirname, 'tabline-extension')) {
     super();
     this.dataDir = dataDir;
+    this.freezerFile = path.join(dataDir, 'freezer.json');
+    this.freezer = this.readFreezer();
     this.status = 'idle';
     this.session = null;
     this.client = null;
     this.process = null;
     this.captureBusy = false;
     this.captureTimers = new Map();
+    this.inactivityInterval = null;
+    this.inactivityBusy = false;
     this.debugPort = null;
     this.lastError = null;
     this.persistTimer = null;
@@ -119,6 +134,38 @@ class BrowserController extends EventEmitter {
       fs.renameSync(`${destination}.tmp`, destination);
     } catch (error) { this.emit('storage-error', error.message); }
   }
+
+  readFreezer() {
+    try {
+      const value = JSON.parse(fs.readFileSync(this.freezerFile, 'utf8'));
+      return { entries: Array.isArray(value.entries) ? value.entries : [], whitelist: Array.isArray(value.whitelist) ? value.whitelist : [] };
+    } catch { return { entries: [], whitelist: [] }; }
+  }
+
+  persistFreezer() {
+    try {
+      fs.writeFileSync(`${this.freezerFile}.tmp`, JSON.stringify(this.freezer));
+      fs.renameSync(`${this.freezerFile}.tmp`, this.freezerFile);
+    } catch (error) { this.emit('storage-error', error.message); }
+  }
+
+  freezerUrl(slug) { return `${bridgeOrigin}/s/${encodeURIComponent(slug)}`; }
+  entryForSlug(slug) { return this.freezer.entries.find((entry) => entry.slug === slug) || null; }
+  entryForUrl(url) {
+    return this.freezer.entries.find((entry) => entry.active && this.freezerUrl(entry.slug) === url) || null;
+  }
+  entryForTab(tab) {
+    if (!tab) return null;
+    return (tab.frozenSlug && this.entryForSlug(tab.frozenSlug)) || this.freezer.entries.find((entry) => entry.active && entry.targetId === tab.id) || null;
+  }
+  tabForExtensionInfo(info = {}) {
+    const tabs = this.session?.tabs || [];
+    return tabs.find((tab) => info.targetId && tab.id === info.targetId)
+      || tabs.find((tab) => Number.isInteger(info.tabId) && tab.extensionTabId === info.tabId && (!Number.isInteger(info.windowId) || tab.extensionWindowId === info.windowId))
+      || tabs.find((tab) => tab.windowId === String(info.windowId) && tab.url === info.url && tab.title === info.title)
+      || null;
+  }
+  isWhitelisted(url) { return this.freezer.whitelist.includes(url); }
 
   listSessions() {
     return fs.readdirSync(path.join(this.dataDir, 'sessions')).filter((name) => name.endsWith('.json')).flatMap((name) => {
@@ -224,7 +271,7 @@ class BrowserController extends EventEmitter {
   loadSession(id) {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid session ID');
     const session = JSON.parse(fs.readFileSync(path.join(this.dataDir, 'sessions', `${id}.json`), 'utf8'));
-    session.tabs.forEach((tab) => { tab.windowHistory ||= []; tab.desktopId ||= 'unknown'; tab.windowId ||= null; tab.extensionTabId ??= null; tab.extensionWindowId ??= null; tab.tabIndex ??= null; tab.pinned ||= false; tab.active ||= false; tab.orderHistory ||= []; tab.groupId ??= null; tab.groupTitle ??= null; tab.groupColor ??= null; tab.groupCollapsed ||= false; tab.groupHistory ||= []; });
+    session.tabs.forEach((tab) => { tab.windowHistory ||= []; tab.desktopId ||= 'unknown'; tab.windowId ||= null; tab.extensionTabId ??= null; tab.extensionWindowId ??= null; tab.tabIndex ??= null; tab.pinned ||= false; tab.active ||= false; tab.lastActiveAt ??= null; tab.inactiveScreenshotAt ??= null; tab.frozen ||= false; tab.frozenSlug ??= null; tab.originalUrl ??= null; tab.orderHistory ||= []; tab.groupId ??= null; tab.groupTitle ??= null; tab.groupColor ??= null; tab.groupCollapsed ||= false; tab.groupHistory ||= []; });
     // A session interrupted by an app/process crash has no explicit end time.
     if (!session.endedAt && session.id !== this.session?.id) {
       session.endedAt = Math.max(session.startedAt, ...session.tabs.flatMap((tab) => [tab.openedAt, tab.closedAt || 0, tab.thumbnailAt || 0, ...tab.navigations.map((nav) => nav.at)]));
@@ -298,6 +345,7 @@ class BrowserController extends EventEmitter {
       targetInfos.forEach((info) => this.onTarget(info));
       this.interval = setInterval(() => this.captureAll(), 60000);
       this.locationInterval = setInterval(() => this.refreshAllTargetLocations().catch(() => {}), 1000);
+      this.inactivityInterval = setInterval(() => this.checkInactiveTabs().catch(() => {}), 5000);
       await this.refreshAllTargetLocations();
       this.publish();
       return this.snapshot();
@@ -315,9 +363,27 @@ class BrowserController extends EventEmitter {
   onTarget(info) {
     if (!this.session) return;
     const previous = this.session.tabs.find((tab) => tab.id === info.targetId);
-    const shouldCapture = !previous || previous.url !== info.url || previous.title !== info.title;
+    const frozenEntry = this.entryForUrl(info.url);
+    const previousFrozenEntry = this.entryForTab(previous);
+    const shouldCapture = !frozenEntry && (!previous || previous.url !== info.url || previous.title !== info.title) && !previous?.inactiveScreenshotAt;
     const tab = upsertTarget(this.session, info);
     if (!tab) return;
+    if (frozenEntry) {
+      tab.frozen = true;
+      tab.frozenSlug = frozenEntry.slug;
+      tab.originalUrl = frozenEntry.originalUrl;
+      tab.title = frozenEntry.title || tab.title;
+      if (frozenEntry.screenshot) {
+        tab.thumbnail = frozenEntry.screenshot;
+        tab.thumbnailAt = frozenEntry.updatedAt || frozenEntry.createdAt;
+      }
+    } else if (previousFrozenEntry && previous?.frozen && info.url !== this.freezerUrl(previousFrozenEntry.slug)) {
+      previousFrozenEntry.active = false;
+      tab.frozen = false;
+      tab.frozenSlug = null;
+      tab.originalUrl = null;
+      this.persistFreezer();
+    }
     this.refreshTargetLocation(tab).then(() => this.publish()).catch(() => {});
     this.publish();
     if (shouldCapture) {
@@ -329,38 +395,63 @@ class BrowserController extends EventEmitter {
     }
   }
 
+  frozenPage(entry) {
+    const screenshot = typeof entry.screenshot === 'string' && entry.screenshot.startsWith('data:image/') ? entry.screenshot : '';
+    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(entry.title || 'Frozen tab')}</title><style>*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#f5f1ea;color:#2b302f;font-family:Inter,Segoe UI,Arial,sans-serif}body{padding:40px 28px 130px}.shell{max-width:1120px;margin:auto}.eyebrow{font-size:11px;letter-spacing:2px;color:#887968;font-weight:700}.heading{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin:10px 0 26px}.heading h1{font-size:clamp(22px,4vw,42px);line-height:1.08;letter-spacing:-1.5px;margin:0;max-width:800px}.url{color:#887968;font-size:13px;word-break:break-all;margin-top:10px}.preview{background:#fff;border:1px solid #e2d9cd;border-radius:16px;padding:12px;box-shadow:0 20px 55px #654d3317}.preview img{display:block;width:100%;height:auto;border-radius:9px}.empty{min-height:300px;display:grid;place-items:center;color:#887968}.return{position:fixed;z-index:2;left:50%;bottom:24px;transform:translateX(-50%);border:1px solid #3f554c;background:#314840;color:#f6f4ed;border-radius:999px;padding:15px 24px;font:600 15px Segoe UI,Arial,sans-serif;box-shadow:0 12px 30px #31484042;cursor:pointer}.return:hover{background:#253a33}.return:disabled{opacity:.6;cursor:wait}@media(max-width:600px){body{padding:24px 14px 112px}.heading{display:block}.url{font-size:11px}.return{width:calc(100% - 28px);bottom:14px}}</style></head><body><main class="shell"><div class="eyebrow">TABLINE SNAPSHOT</div><div class="heading"><div><h1>${escapeHtml(entry.title || 'Frozen tab')}</h1><div class="url">${escapeHtml(entry.originalUrl)}</div></div></div><div class="preview">${screenshot ? `<img src="${screenshot}" alt="Screenshot of ${escapeHtml(entry.title || 'the frozen tab')}">` : '<div class="empty">No screenshot was available for this tab.</div>'}</div></main><button class="return" id="return">Return to original page</button><script>const button=document.getElementById('return');button.addEventListener('click',async()=>{button.disabled=true;button.textContent='Returning...';try{const response=await fetch('/unfreeze/${encodeURIComponent(entry.slug)}',{method:'POST'});if(!response.ok)throw new Error('Unable to restore this tab');const result=await response.json();location.href=result.originalUrl}catch(error){button.disabled=false;button.textContent=error.message}});</script></body></html>`;
+  }
+
   async startGroupBridge() {
     this.groupToken = randomUUID();
-    this.groupBridge = http.createServer((request, response) => {
-      if (request.method === 'OPTIONS') {
-        response.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
-        response.end();
-        return;
-      }
-      if (request.method === 'GET' && request.url === '/restore') {
-        if (!this.pendingRestore || this.pendingRestore.delivered) { response.writeHead(204, { 'Access-Control-Allow-Origin': '*' }); response.end(); return; }
-        this.pendingRestore.delivered = true;
-        response.writeHead(200, { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' });
-        response.end(JSON.stringify(this.pendingRestore.plan));
-        return;
-      }
-      if (request.method !== 'POST' || !['/tab-groups', '/restore-result'].includes(request.url)) {
-        response.writeHead(404); response.end(); return;
-      }
+    const headers = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' };
+    const sendJson = (response, status, value) => { response.writeHead(status, { ...headers, 'Content-Type': 'application/json' }); response.end(JSON.stringify(value)); };
+    const readJson = (request) => new Promise((resolve, reject) => {
       let body = '';
-      request.on('data', (chunk) => { body += chunk; if (body.length > 1024 * 1024) request.destroy(); });
-      request.on('end', () => {
-        try {
-          const message = JSON.parse(body);
-          if (request.url === '/restore-result') {
-            this.restoreResolve?.(message);
-            this.restoreResolve = null;
-          } else {
-            for (const groupTab of Array.isArray(message.tabs) ? message.tabs : []) this.onGroupInfo(groupTab);
-          }
-          response.writeHead(204, { 'Access-Control-Allow-Origin': '*' }); response.end();
-        } catch { response.writeHead(400); response.end(); }
-      });
+      request.on('data', (chunk) => { body += chunk; if (body.length > 1024 * 1024) reject(new Error('Request too large')); });
+      request.on('end', () => { try { resolve(body ? JSON.parse(body) : {}); } catch { reject(new Error('Invalid JSON')); } });
+      request.on('error', reject);
+    });
+    this.groupBridge = http.createServer(async (request, response) => {
+      if (request.method === 'OPTIONS') { response.writeHead(204, headers); response.end(); return; }
+      try {
+        if (request.method === 'GET' && request.url === '/restore') {
+          if (!this.pendingRestore || this.pendingRestore.delivered) { response.writeHead(204, headers); response.end(); return; }
+          this.pendingRestore.delivered = true;
+          sendJson(response, 200, this.pendingRestore.plan);
+          return;
+        }
+        const frozenMatch = request.url?.match(/^\/s\/([^/?#]+)$/);
+        if (request.method === 'GET' && frozenMatch) {
+          const entry = this.entryForSlug(decodeURIComponent(frozenMatch[1]));
+          if (!entry) { response.writeHead(404, headers); response.end('Frozen page not found'); return; }
+          response.writeHead(200, { ...headers, 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          response.end(this.frozenPage(entry));
+          return;
+        }
+        const unfreezeMatch = request.url?.match(/^\/unfreeze\/([^/?#]+)$/);
+        if (request.method === 'POST' && unfreezeMatch) { sendJson(response, 200, this.unfreezeSlug(decodeURIComponent(unfreezeMatch[1]))); return; }
+        if (request.method !== 'POST') { response.writeHead(404, headers); response.end(); return; }
+        const message = await readJson(request);
+        if (request.url === '/restore-result') {
+          this.restoreResolve?.(message);
+          this.restoreResolve = null;
+          response.writeHead(204, headers); response.end();
+        } else if (request.url === '/tab-groups') {
+          for (const groupTab of Array.isArray(message.tabs) ? message.tabs : []) this.onGroupInfo(groupTab);
+          response.writeHead(204, headers); response.end();
+        } else if (request.url === '/extension/status') {
+          sendJson(response, 200, this.freezerStatus(message));
+        } else if (request.url === '/extension/freeze') {
+          sendJson(response, 200, await this.freezeTab(message));
+        } else if (request.url === '/extension/freeze-all') {
+          sendJson(response, 200, await this.freezeAllTabs(Array.isArray(message.tabs) ? message.tabs : []));
+        } else if (request.url === '/extension/whitelist') {
+          sendJson(response, 200, this.setWhitelist(message, message.enabled !== false));
+        } else if (request.url === '/extension/unfreeze') {
+          sendJson(response, 200, this.unfreezeTab(message));
+        } else {
+          response.writeHead(404, headers); response.end();
+        }
+      } catch (error) { sendJson(response, 400, { error: error.message || 'Request failed' }); }
     });
     await new Promise((resolve, reject) => { this.groupBridge.once('error', reject); this.groupBridge.listen(17637, '127.0.0.1', resolve); });
   }
@@ -377,11 +468,18 @@ class BrowserController extends EventEmitter {
     const groupId = Number.isInteger(info.groupId) && info.groupId >= 0 ? info.groupId : null;
     const changed = tab.groupId !== groupId || tab.groupTitle !== (info.groupTitle || null) || tab.groupColor !== (info.groupColor || null) || tab.groupCollapsed !== (info.groupCollapsed || false);
     const orderChanged = Number.isInteger(info.index) && (tab.tabIndex !== info.index || tab.extensionWindowId !== info.windowId);
+    const now = Date.now();
+    const wasActive = tab.active === true;
+    const nextActive = typeof info.active === 'boolean' ? info.active : wasActive;
     tab.extensionTabId = Number.isInteger(info.tabId) ? info.tabId : tab.extensionTabId ?? null;
     tab.extensionWindowId = Number.isInteger(info.windowId) ? info.windowId : tab.extensionWindowId ?? null;
     tab.tabIndex = Number.isInteger(info.index) ? info.index : tab.tabIndex ?? null;
     tab.pinned = typeof info.pinned === 'boolean' ? info.pinned : !!tab.pinned;
-    tab.active = typeof info.active === 'boolean' ? info.active : !!tab.active;
+    tab.active = nextActive;
+    if (nextActive && (!wasActive || !tab.lastActiveAt)) {
+      tab.lastActiveAt = now;
+      tab.inactiveScreenshotAt = null;
+    } else if (!nextActive && !tab.lastActiveAt) tab.lastActiveAt = now;
     if (!tab.orderHistory) tab.orderHistory = [];
     if (orderChanged) tab.orderHistory.push({ windowId: tab.extensionWindowId, index: tab.tabIndex, at: Date.now() });
     tab.groupId = groupId;
@@ -393,6 +491,133 @@ class BrowserController extends EventEmitter {
       tab.groupHistory.push({ groupId, title: tab.groupTitle, color: tab.groupColor, at: Date.now() });
     }
     this.publish();
+  }
+
+  async freezeTab(tabInfo, options = {}) {
+    if (this.status !== 'live' || !this.session) throw new Error('Start a browser session before freezing tabs.');
+    const tab = this.tabForExtensionInfo(tabInfo);
+    if (!tab || tab.closedAt) throw new Error('This tab is no longer open.');
+    const currentEntry = this.entryForTab(tab);
+    if (currentEntry && currentEntry.active && tab.url === this.freezerUrl(currentEntry.slug)) return { tabId: tab.extensionTabId, targetId: tab.id, shortUrl: this.freezerUrl(currentEntry.slug), slug: currentEntry.slug, frozen: true };
+    const originalUrl = currentEntry?.originalUrl || tab.originalUrl || tab.url;
+    if (!freezableUrl(originalUrl)) return { tabId: tab.extensionTabId, targetId: tab.id, skipped: 'This tab does not contain a web page.' };
+    if (this.isWhitelisted(originalUrl)) return { tabId: tab.extensionTabId, targetId: tab.id, skipped: 'This tab is whitelisted.' };
+    clearTimeout(this.captureTimers.get(tab.id));
+    this.captureTimers.delete(tab.id);
+    const screenshot = options.capture === false ? tab.thumbnail || null : await this.capture(tab.id).catch(() => tab.thumbnail || null);
+    let entry = currentEntry || this.freezer.entries.find((item) => !item.active && item.targetId === tab.id && item.originalUrl === originalUrl);
+    if (!entry) {
+      let slug;
+      do { slug = randomUUID().replaceAll('-', '').slice(0, 10); } while (this.entryForSlug(slug));
+      entry = { slug, originalUrl, title: tab.title || originalUrl, screenshot, createdAt: Date.now(), updatedAt: Date.now(), targetId: tab.id, extensionTabId: tab.extensionTabId ?? null, extensionWindowId: tab.extensionWindowId ?? null, active: true };
+      this.freezer.entries.push(entry);
+    } else {
+      entry.originalUrl = originalUrl;
+      entry.title = tab.title || entry.title || originalUrl;
+      entry.screenshot = screenshot || entry.screenshot || null;
+      entry.updatedAt = Date.now();
+      entry.targetId = tab.id;
+      entry.extensionTabId = tab.extensionTabId ?? entry.extensionTabId ?? null;
+      entry.extensionWindowId = tab.extensionWindowId ?? entry.extensionWindowId ?? null;
+      entry.active = true;
+    }
+    this.persistFreezer();
+    this.publish();
+    return { tabId: tab.extensionTabId, targetId: tab.id, shortUrl: this.freezerUrl(entry.slug), slug: entry.slug, frozen: true };
+  }
+
+  async freezeTabById(id) {
+    return this.freezeTab({ targetId: id });
+  }
+
+  unfreezeSlug(slug) {
+    const entry = this.entryForSlug(slug);
+    if (!entry) throw new Error('This frozen page is no longer available.');
+    entry.active = false;
+    const tab = this.session?.tabs.find((item) => item.id === entry.targetId || item.frozenSlug === slug);
+    if (tab) {
+      tab.frozen = false;
+      tab.frozenSlug = null;
+      tab.originalUrl = null;
+    }
+    this.persistFreezer();
+    this.publish();
+    return { originalUrl: entry.originalUrl, slug: entry.slug };
+  }
+
+  unfreezeTab(tabInfo) {
+    const tab = this.tabForExtensionInfo(tabInfo);
+    const entry = this.entryForTab(tab) || this.entryForUrl(tab?.url);
+    if (!entry) throw new Error('This tab is not frozen.');
+    return this.unfreezeSlug(entry.slug);
+  }
+
+  unfreezeTabById(id) { return this.unfreezeTab({ targetId: id }); }
+
+  freezerStatus(tabInfo) {
+    const tab = this.tabForExtensionInfo(tabInfo);
+    const entry = this.entryForTab(tab) || this.entryForUrl(tab?.url);
+    const originalUrl = entry?.originalUrl || tab?.originalUrl || tab?.url || '';
+    const currentUrl = tabInfo.url || tab?.url;
+    return { frozen: !!entry?.active && (tab?.frozen || currentUrl === this.freezerUrl(entry.slug)), whitelisted: this.isWhitelisted(originalUrl), freezable: freezableUrl(originalUrl), slug: entry?.slug || null };
+  }
+
+  setWhitelist(tabInfo, enabled) {
+    const tab = this.tabForExtensionInfo(tabInfo);
+    const entry = this.entryForTab(tab) || this.entryForUrl(tab?.url);
+    const url = entry?.originalUrl || tab?.originalUrl || tab?.url;
+    if (!freezableUrl(url)) throw new Error('Only web pages can be whitelisted.');
+    this.freezer.whitelist = this.freezer.whitelist.filter((item) => item !== url);
+    if (enabled) this.freezer.whitelist.push(url);
+    this.persistFreezer();
+    return { whitelisted: enabled, url };
+  }
+
+  async freezeAllTabs(tabInfos = []) {
+    const infos = tabInfos.length ? tabInfos : (this.session?.tabs || []).filter((tab) => !tab.closedAt).map((tab) => ({ targetId: tab.id, tabId: tab.extensionTabId, windowId: tab.extensionWindowId, url: tab.url, title: tab.title }));
+    const items = [];
+    const skipped = [];
+    for (const info of infos) {
+      try {
+        const result = await this.freezeTab(info);
+        if (result.shortUrl) items.push(result);
+        else skipped.push({ tabId: result.tabId, reason: result.skipped || 'Skipped' });
+      } catch (error) { skipped.push({ tabId: info.tabId, reason: error.message }); }
+    }
+    return { items, skipped, windows: new Set(infos.map((info) => info.windowId).filter((id) => id !== undefined)).size };
+  }
+
+  async navigateTab(id, url) {
+    if (!this.client) throw new Error('Browser is not connected.');
+    let sessionId;
+    try {
+      ({ sessionId } = await this.client.send('Target.attachToTarget', { targetId: id, flatten: true }));
+      await this.client.send('Page.navigate', { url }, sessionId);
+    } finally {
+      if (sessionId) await this.client.send('Target.detachFromTarget', { sessionId }).catch(() => {});
+    }
+  }
+
+  async checkInactiveTabs() {
+    if (this.inactivityBusy || this.status !== 'live' || !this.session) return;
+    this.inactivityBusy = true;
+    try {
+      const now = Date.now();
+      for (const tab of this.session.tabs.filter((item) => !item.closedAt && !item.frozen && item.active === false && Number.isInteger(item.extensionTabId) && item.lastActiveAt)) {
+        try {
+          const inactiveFor = now - tab.lastActiveAt;
+          if (inactiveFor >= inactivityScreenshotAfter && !tab.inactiveScreenshotAt) {
+            await this.capture(tab.id).catch(() => {});
+            tab.inactiveScreenshotAt = now;
+            this.publish();
+          }
+          if (inactiveFor >= inactivityFreezeAfter && !tab.active && !tab.frozen) {
+            const result = await this.freezeTab({ targetId: tab.id }, { capture: false });
+            if (result.shortUrl) await this.navigateTab(tab.id, result.shortUrl);
+          }
+        } catch {}
+      }
+    } finally { this.inactivityBusy = false; }
   }
 
   async refreshTargetLocation(tab) {
@@ -431,6 +656,7 @@ class BrowserController extends EventEmitter {
     const tab = this.session?.tabs.find((item) => item.id === id);
     const client = this.client;
     if (!tab || tab.closedAt || this.status !== 'live' || !client) return;
+    if (tab.frozen) return tab.thumbnail;
     let sessionId;
     try {
       ({ sessionId } = await client.send('Target.attachToTarget', { targetId: id, flatten: true }));
@@ -456,7 +682,7 @@ class BrowserController extends EventEmitter {
     if (this.captureBusy || this.status !== 'live') return;
     this.captureBusy = true;
     try {
-      for (const tab of this.session.tabs.filter((item) => !item.closedAt)) {
+      for (const tab of this.session.tabs.filter((item) => !item.closedAt && !item.frozen && !item.inactiveScreenshotAt)) {
         if (this.status !== 'live') break;
         await this.capture(tab.id).catch(() => {});
       }
@@ -487,6 +713,9 @@ class BrowserController extends EventEmitter {
   finish() {
     clearInterval(this.interval);
     clearInterval(this.locationInterval);
+    clearInterval(this.inactivityInterval);
+    this.inactivityInterval = null;
+    this.inactivityBusy = false;
     for (const timer of this.captureTimers.values()) clearTimeout(timer);
     this.captureTimers.clear();
     if (this.session && !this.session.endedAt) {

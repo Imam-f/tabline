@@ -16,6 +16,11 @@ export interface BrowserTab {
   tabIndex?: number | null;
   pinned?: boolean;
   active?: boolean;
+  lastActiveAt?: number | null;
+  inactiveScreenshotAt?: number | null;
+  frozen?: boolean;
+  frozenSlug?: string | null;
+  originalUrl?: string | null;
   orderHistory?: Array<{ windowId: number | null; index: number; at: number }>;
   groupId: number | null;
   groupTitle: string | null;
@@ -55,6 +60,9 @@ export interface TablineAPI {
   focusTab(id: string): Promise<void>;
   closeTab(id: string): Promise<void>;
   capture(id: string): Promise<string | undefined>;
+  freezeTab(id: string): Promise<{ shortUrl: string; slug: string }>;
+  unfreezeTab(id: string): Promise<{ originalUrl: string; slug: string }>;
+  freezeAllTabs(): Promise<{ items: Array<{ targetId: string; shortUrl: string; slug: string }>; skipped: Array<{ reason: string }>; windows: number }>;
   listSessions(): Promise<SessionSummary[]>;
   loadSession(id: string): Promise<Session>;
   restoreSession(id: string, options?: { executable?: string }): Promise<RestoreResult>;

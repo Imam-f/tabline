@@ -111,6 +111,7 @@ chrome.tabs.onRemoved.addListener(() => sendSnapshot());
 chrome.tabs.onAttached.addListener(() => sendSnapshot());
 chrome.tabs.onDetached.addListener(() => sendSnapshot());
 chrome.tabs.onUpdated.addListener(() => sendSnapshot());
+chrome.tabs.onActivated.addListener(() => sendSnapshot());
 chrome.tabs.onHighlighted.addListener(() => sendSnapshot());
 chrome.tabs.onMoved.addListener(() => sendSnapshot());
 chrome.tabs.onReplaced.addListener(() => sendSnapshot());

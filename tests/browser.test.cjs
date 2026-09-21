@@ -160,6 +160,56 @@ test('localhost group bridge applies group color metadata to the matching tab', 
   }
 });
 
+test('freezes a tab into a persistent local snapshot URL and restores it', async () => {
+  const dataDir = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-freezer-'));
+  const controller = new BrowserController(dataDir);
+  controller.status = 'live';
+  controller.session = { tabs: [{ id: 'target', title: 'Example', url: 'https://example.com', closedAt: null, extensionTabId: 4, extensionWindowId: 8, thumbnail: null, frozen: false, frozenSlug: null, originalUrl: null }] };
+  controller.capture = async () => { controller.session.tabs[0].thumbnail = 'data:image/jpeg;base64,c2NyZWVuc2hvdA=='; return controller.session.tabs[0].thumbnail; };
+  const frozen = await controller.freezeTab({ targetId: 'target', tabId: 4, windowId: 8, url: 'https://example.com', title: 'Example' });
+  assert.match(frozen.shortUrl, /^http:\/\/127\.0\.0\.1:17637\/s\//);
+  const saved = JSON.parse(require('node:fs').readFileSync(require('node:path').join(dataDir, 'freezer.json'), 'utf8'));
+  assert.equal(saved.entries[0].originalUrl, 'https://example.com');
+  assert.equal(saved.entries[0].screenshot, 'data:image/jpeg;base64,c2NyZWVuc2hvdA==');
+  const reloaded = new BrowserController(dataDir);
+  assert.equal(reloaded.entryForSlug(frozen.slug).originalUrl, 'https://example.com');
+  await controller.startGroupBridge();
+  try {
+    const page = await fetch(frozen.shortUrl);
+    const html = await page.text();
+    assert.match(html, /Return to original page/);
+    assert.match(html, /data:image\/jpeg;base64,c2NyZWVuc2hvdA==/);
+    const result = await fetch(`http://127.0.0.1:17637/unfreeze/${frozen.slug}`, { method: 'POST' });
+    assert.deepEqual(await result.json(), { originalUrl: 'https://example.com', slug: frozen.slug });
+    assert.equal(controller.freezer.entries[0].active, false);
+  } finally {
+    controller.groupBridge.close();
+    clearTimeout(controller.persistTimer);
+  }
+});
+
+test('freeze all skips a persistent whitelist across browser windows', async () => {
+  const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-freezer-all-')));
+  controller.status = 'live';
+  controller.session = { tabs: [
+    { id: 'one', title: 'One', url: 'https://one.example', closedAt: null, extensionTabId: 1, extensionWindowId: 10, thumbnail: null },
+    { id: 'two', title: 'Two', url: 'https://two.example', closedAt: null, extensionTabId: 2, extensionWindowId: 20, thumbnail: null },
+  ] };
+  controller.capture = async (id) => { const tab = controller.session.tabs.find((item) => item.id === id); tab.thumbnail = 'data:image/jpeg;base64,eA=='; return tab.thumbnail; };
+  controller.setWhitelist({ targetId: 'two' }, true);
+  const result = await controller.freezeAllTabs([
+    { targetId: 'one', tabId: 1, windowId: 10, url: 'https://one.example', title: 'One' },
+    { targetId: 'two', tabId: 2, windowId: 20, url: 'https://two.example', title: 'Two' },
+  ]);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].tabId, 1);
+  assert.match(result.skipped[0].reason, /whitelisted/);
+  assert.equal(result.windows, 2);
+  const reloaded = new BrowserController(controller.dataDir);
+  assert.deepEqual(reloaded.freezer.whitelist, ['https://two.example']);
+  clearTimeout(controller.persistTimer);
+});
+
 test('group updates catch an ungrouped tab moved into a group without a target ID', () => {
   const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-group-move-')));
   controller.session = { tabs: [{ id: 'target', windowId: '42', url: 'https://example.com', title: 'Example', groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [] }] };

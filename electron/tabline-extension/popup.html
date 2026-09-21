@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tabline freezer</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">TABLINE FREEZER</div>
+      <h1 id="title">Checking this tab...</h1>
+      <p id="url" class="url"></p>
+      <p id="status" class="status">Connect to a live Tabline session to manage frozen tabs.</p>
+      <button id="freeze" class="primary" hidden>Freeze this tab</button>
+      <button id="return" class="primary" hidden>Return to original page</button>
+      <button id="whitelist" class="secondary" hidden>Whitelist this tab</button>
+      <button id="freeze-all" class="secondary" hidden>Freeze all tabs</button>
+      <p class="scope">Freeze all includes every browser window and virtual desktop. Whitelisted pages are skipped.</p>
+      <p id="error" class="error" hidden></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

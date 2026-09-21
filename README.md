@@ -49,6 +49,7 @@ Installers are placed in `release/`. `npm run dist:dir` creates an unpacked desk
 - **Tab order and restore** — track each tab's strip position, pinned and active state, and restore the tabs that were open when a saved session ended. The companion recreates windows, ordering, opener links, pinning, and groups when available; a CDP fallback still restores validated web URLs and windows when Chrome blocks the extension. On Windows, recreated windows are moved back to their saved virtual desktop when that desktop still exists.
 - **Thumbnails** — real JPEG snapshots after page changes and approximately every 60 seconds. Select a tab to view a larger preview or refresh it manually.
 - **Tab details** — page history, parent and child tabs, duration, and buttons to focus or close an open browser tab.
+- **Tab freezer** — the Tabline companion extension can turn an individual tab into a persistent local short URL backed by its latest screenshot. The snapshot page has a floating return button, and the extension can whitelist the current tab or freeze every tab across all browser windows and virtual desktops.
 - **Saved sessions** — automatically persist timelines, navigation history, and thumbnails locally. Reopen a session or export it as portable JSON.
 - **Demo mode** — explore an example timeline without launching a browser. The standalone web preview (`npm run dev:web`) uses the demo; browser launching requires Electron.
 
@@ -88,7 +89,7 @@ Data lives inside Electron’s platform-specific `userData` directory:
 | macOS | `~/Library/Application Support/tabline/browser-data/` |
 | Linux | `~/.config/tabline/browser-data/` |
 
-The `sessions/` folder contains JSON sessions (including base64 JPEG thumbnails). The `profiles/` folder contains the dedicated browser profiles. URLs and visible page content can be present in session exports. 
+The `sessions/` folder contains JSON sessions (including base64 JPEG thumbnails). `freezer.json` contains persistent local short-URL mappings, whitelist entries, and frozen screenshots. The `profiles/` folder contains the dedicated browser profiles. URLs and visible page content can be present in session exports and freezer data.
 
 ## Development & checks
 

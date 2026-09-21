@@ -36,6 +36,9 @@ else {
     ipcMain.handle('tab:focus', (_event, id) => controller.focusTab(id));
     ipcMain.handle('tab:close', (_event, id) => controller.closeTab(id));
     ipcMain.handle('tab:capture', (_event, id) => controller.capture(id));
+    ipcMain.handle('tab:freeze', (_event, id) => controller.freezeTabById(id));
+    ipcMain.handle('tab:unfreeze', (_event, id) => controller.unfreezeTabById(id));
+    ipcMain.handle('tabs:freeze-all', () => controller.freezeAllTabs());
     ipcMain.handle('sessions:list', () => controller.listSessions());
     ipcMain.handle('sessions:load', (_event, id) => controller.loadSession(id));
     ipcMain.handle('sessions:restore', (_event, id, options) => controller.restoreSession(id, options));
