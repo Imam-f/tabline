@@ -2,6 +2,8 @@
 
 A local-first Electron app that turns your Helium or Chrome browsing session into a visual timeline. See when every tab opened and closed, preview its thumbnail, and follow arrows back to the tab that opened it.
 
+See [GitHub Releases](https://github.com/Imam-f/tabline/releases) for downloads and the changelog.
+
 ## Screenshots
 
 The timeline connects each tab to the tab that opened it, with thumbnails and a details panel.
@@ -43,14 +45,14 @@ Installers are placed in `release/`. `npm run dist:dir` creates an unpacked desk
 - **Browser launcher** — Helium by default, with Chrome as an option and a custom executable picker. If only Chrome is installed, it is preselected.
 - **Live timeline** — one lane per tab, with its opening time, lifetime, and closing time. Zoom, search, and filter open, closed, or connected tabs.
 - **Opener arrows** — connect a new tab to its parent using Chromium’s `TargetInfo.openerId`.
-- **Window grouping** — resolve each tab to its Chromium browser window with `Browser.getWindowForTarget` and group the timeline by window. On Windows, Tabline also maps that window to its native virtual desktop, including desktops that are not currently visible. Other platforms label virtual-desktop membership as unavailable.
+- **Window grouping** — resolve each tab to its Chromium browser window with `Browser.getWindowForTarget`. Both timeline and list views have independently collapsible virtual-desktop and window sections. On Windows, Tabline also maps each window to its native virtual desktop, including desktops that are not currently visible. Other platforms label virtual-desktop membership as unavailable.
 - **Window move history** — browser-window membership is polled independently every second, rather than only when a tab navigates or becomes active. Each detected move is timestamped in `windowHistory` and shown in the tab details panel.
 - **Tab groups** — the managed browser loads the bundled Tabline companion extension, which reports Chromium tab-group membership, group title, color, collapsed state, and changes over a localhost-only bridge. Group updates are recorded independently of page navigation.
-- **Tab order and restore** — track each tab's strip position, pinned and active state, and restore the tabs that were open when a saved session ended. The companion recreates windows, ordering, opener links, pinning, and groups when available; a CDP fallback still restores validated web URLs and windows when Chrome blocks the extension. On Windows, recreated windows are moved back to their saved virtual desktop when that desktop still exists.
+- **Tab order and restore** — track each tab's strip position, pinned and active state, and restore the tabs that were open when a saved session ended. To restore an earlier point, open the saved session, drag the timeline's time marker (or focus it and use the left/right arrow keys), then click **Restore from here**. The companion recreates windows, ordering, opener links, pinning, and groups when available; a CDP fallback still restores validated web URLs and windows when Chrome blocks the extension. On Windows, recreated windows are moved back to their saved virtual desktop when that desktop still exists.
 - **Thumbnails** — real JPEG snapshots after page changes and approximately every 60 seconds. Select a tab to view a larger preview or refresh it manually.
 - **Tab details** — page history, parent and child tabs, duration, and buttons to focus or close an open browser tab.
-- **Tab freezer** — the Tabline companion extension can turn an individual tab into a persistent local short URL backed by its latest screenshot. Tabs inactive for five minutes get a preserved screenshot; after ten minutes they move to the snapshot page. The snapshot page has a floating return button, and the extension can whitelist the current tab or freeze every tab across all browser windows and virtual desktops. Extension UI pages are excluded from the timeline.
-- **Saved sessions** — automatically persist timelines, navigation history, and thumbnails locally. Reopen a session or export it as portable JSON.
+- **Tab freezer** — the Tabline companion extension can turn an individual tab into a persistent local short URL backed by its latest screenshot. Tabs inactive for five minutes get a preserved screenshot; after ten minutes they move to the snapshot page. The snapshot page has a floating return button, and the app's tab details panel also provides **Freeze tab** and **Return to original page** controls for live tabs. The extension can whitelist the current tab; its **Freeze all tabs** action freezes other tabs across all browser windows and virtual desktops, leaving the current tab and whitelisted pages untouched. Extension UI pages are excluded from the timeline.
+- **Saved sessions** — automatically persist timelines, navigation history, and thumbnails locally. Click a saved session to select it, double-click to open it, or drag it to reorder. Organize sessions into folders, rename or delete them, and export an opened session as portable JSON.
 - **Demo mode** — explore an example timeline without launching a browser. The standalone web preview (`npm run dev:web`) uses the demo; browser launching requires Electron.
 
 ## How it works
@@ -77,7 +79,7 @@ The renderer is sandboxed with context isolation, no Node integration, a restric
 - Existing/restored tabs at connection time are timestamped when Tabline first observes them. The DevTools Protocol does not provide a historical tab creation timestamp.
 - A thumbnail is the latest captured viewport, not a recording of the page. Protected/internal pages or tabs closed immediately may have no screenshot. Closed tabs keep the last successful snapshot.
 - A tab’s navigation history is recorded during the session. The detail panel shows its four latest pages; the JSON export contains the full history.
-- Long sessions with many thumbnails increase local storage usage. To remove sessions, quit the app and delete the relevant JSON files from the sessions directory.
+- Long sessions with many thumbnails increase local storage usage. To remove a saved session, click its trash icon in the saved-session list and confirm **Delete session**.
 
 ## Local data
 
