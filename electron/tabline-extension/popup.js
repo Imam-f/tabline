@@ -51,6 +51,7 @@ async function update() {
   $('return').hidden = !state.frozen;
   $('whitelist').hidden = state.frozen || !state.freezable;
   $('whitelist').textContent = state.whitelisted ? 'Remove from whitelist' : 'Whitelist this tab';
+  $('close').hidden = false;
   $('freeze-all').hidden = false;
 }
 
@@ -66,14 +67,19 @@ $('whitelist').addEventListener('click', async () => {
   try { setBusy(true); await request('/extension/whitelist', { ...info(current, targetId), enabled: !state.whitelisted }); await update(); setBusy(false); } catch (error) { setBusy(false); showError(error); }
 });
 
+$('close').addEventListener('click', async () => {
+  try { setBusy(true); await request('/extension/close', info(current, targetId)); window.close(); } catch (error) { setBusy(false); showError(error); }
+});
+
 $('freeze-all').addEventListener('click', async () => {
   try {
     setBusy(true);
     const allTabs = await tabs({});
     const allTargets = new Map((await targets()).filter((item) => item.tabId !== undefined).map((item) => [item.tabId, item.targetId]));
-    const result = await request('/extension/freeze-all', { tabs: allTabs.map((tab) => info(tab, allTargets.get(tab.id))) });
+    const remainingTabs = allTabs.filter((tab) => tab.id !== current.id);
+    const result = await request('/extension/freeze-all', { tabs: remainingTabs.map((tab) => info(tab, allTargets.get(tab.id))), exclude: info(current, targetId) });
     for (const item of result.items || []) { const tab = allTabs.find((candidate) => candidate.id === item.tabId); if (tab) await chromeCall(chrome.tabs.update.bind(chrome.tabs), tab.id, { url: item.shortUrl }); }
-    $('status').textContent = `Frozen ${result.items?.length || 0} tabs across ${result.windows || 0} windows.`;
+    $('status').textContent = `Frozen ${result.items?.length || 0} other tabs across ${result.windows || 0} windows. This tab was left alone.`;
     setBusy(false);
   } catch (error) { setBusy(false); showError(error); }
 });

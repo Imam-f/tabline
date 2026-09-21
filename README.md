@@ -2,6 +2,12 @@
 
 A local-first Electron app that turns your Helium or Chrome browsing session into a visual timeline. See when every tab opened and closed, preview its thumbnail, and follow arrows back to the tab that opened it.
 
+## 0.1.5
+
+- Added session restoration with tab ordering, opener links, pinning, tab groups, and virtual-desktop placement when supported.
+- Added the Tabline companion tab freezer for persistent local short URLs and inactivity snapshots.
+- Refreshed the screenshots to show the current timeline and saved-session experience.
+
 ## Screenshots
 
 The timeline connects each tab to the tab that opened it, with thumbnails and a details panel.

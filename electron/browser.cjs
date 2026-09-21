@@ -499,7 +499,10 @@ class BrowserController extends EventEmitter {
         } else if (request.url === '/extension/freeze') {
           sendJson(response, 200, await this.freezeTab(message));
         } else if (request.url === '/extension/freeze-all') {
-          sendJson(response, 200, await this.freezeAllTabs(Array.isArray(message.tabs) ? message.tabs : []));
+          sendJson(response, 200, await this.freezeAllTabs(Array.isArray(message.tabs) ? message.tabs : [], message.exclude));
+        } else if (request.url === '/extension/close') {
+          await this.closeTabByInfo(message);
+          sendJson(response, 200, { closed: true });
         } else if (request.url === '/extension/whitelist') {
           sendJson(response, 200, this.setWhitelist(message, message.enabled !== false));
         } else if (request.url === '/extension/unfreeze') {
@@ -584,7 +587,9 @@ class BrowserController extends EventEmitter {
   }
 
   async freezeTabById(id) {
-    return this.freezeTab({ targetId: id });
+    const result = await this.freezeTab({ targetId: id });
+    if (result.shortUrl) await this.navigateTab(id, result.shortUrl);
+    return result;
   }
 
   unfreezeSlug(slug) {
@@ -609,7 +614,17 @@ class BrowserController extends EventEmitter {
     return this.unfreezeSlug(entry.slug);
   }
 
-  unfreezeTabById(id) { return this.unfreezeTab({ targetId: id }); }
+  async unfreezeTabById(id) {
+    const result = this.unfreezeTab({ targetId: id });
+    if (result.originalUrl) await this.navigateTab(id, result.originalUrl);
+    return result;
+  }
+
+  async closeTabByInfo(info) {
+    const tab = this.tabForExtensionInfo(info);
+    if (!tab || tab.closedAt) throw new Error('This tab is no longer open.');
+    return this.closeTab(tab.id);
+  }
 
   freezerStatus(tabInfo) {
     const tab = this.tabForExtensionInfo(tabInfo);
@@ -630,18 +645,22 @@ class BrowserController extends EventEmitter {
     return { whitelisted: enabled, url };
   }
 
-  async freezeAllTabs(tabInfos = []) {
+  async freezeAllTabs(tabInfos = [], exclude = null) {
     const infos = tabInfos.length ? tabInfos : (this.session?.tabs || []).filter((tab) => !tab.closedAt).map((tab) => ({ targetId: tab.id, tabId: tab.extensionTabId, windowId: tab.extensionWindowId, url: tab.url, title: tab.title }));
+    const excludedTargetId = exclude?.targetId;
+    const excludedTabId = exclude?.tabId;
+    const excludedWindowId = exclude?.windowId;
+    const filteredInfos = infos.filter((info) => info.targetId !== excludedTargetId && !(Number.isInteger(excludedTabId) && info.tabId === excludedTabId && info.windowId === excludedWindowId));
     const items = [];
     const skipped = [];
-    for (const info of infos) {
+    for (const info of filteredInfos) {
       try {
         const result = await this.freezeTab(info);
         if (result.shortUrl) items.push(result);
         else skipped.push({ tabId: result.tabId, reason: result.skipped || 'Skipped' });
       } catch (error) { skipped.push({ tabId: info.tabId, reason: error.message }); }
     }
-    return { items, skipped, windows: new Set(infos.map((info) => info.windowId).filter((id) => id !== undefined)).size };
+    return { items, skipped, windows: new Set(filteredInfos.map((info) => info.windowId).filter((id) => id !== undefined)).size };
   }
 
   async navigateTab(id, url) {

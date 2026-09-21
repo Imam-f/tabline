@@ -3,7 +3,7 @@ import {
   Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Check, ChevronDown,
   ChevronLeft, ChevronRight, CircleHelp, Clock3, ExternalLink, FolderClock, FolderOpen,
   FolderPlus, GitBranch, Globe2, Image, Layers3, LayoutList, Maximize2, Monitor,
-  Pencil, Plus, Radio, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Square, Trash2, X, Minus,
+  Pencil, Plus, Radio, RefreshCw, Search, Settings2, ShieldCheck, Snowflake, Sparkles, Square, Trash2, X, Minus,
 } from 'lucide-react';
 import type { AppState, BrowserChoice, BrowserTab, Folder, Session, SessionSummary } from './types';
 import { makeDemo } from './demo';
@@ -66,6 +66,7 @@ export default function App() {
   const [dragging, setDragging] = useState<{ type: 'folder' | 'session'; id: string } | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [sessionDropTarget, setSessionDropTarget] = useState<{ id: string; position: 'before' | 'after' } | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [sessionName, setSessionName] = useState('');
   const [deletingSession, setDeletingSession] = useState<SessionSummary | null>(null);
@@ -124,6 +125,7 @@ export default function App() {
     if (!api) return;
     const [nextSessions, nextFolders] = await Promise.all([api.listSessions(), api.listFolders()]);
     setSessions(nextSessions);
+    setSelectedSessionId((id) => id && nextSessions.some((item) => item.id === id) ? id : null);
     setFolders(nextFolders);
   }
   async function restoreSessionById(id: string) {
@@ -134,6 +136,7 @@ export default function App() {
       setState(result.state);
       setArchived(null);
       setDemo(null);
+      setSelectedSessionId(null);
       setSelectedId(null);
       setPage('workspace');
       setQuery('');
@@ -261,7 +264,7 @@ export default function App() {
       {collapsed && <div className="folder-separator" style={{ marginLeft: contentIndent }}/>} 
     </div>;
   };
-  const renderSession = (item: SessionSummary, indent: number): React.ReactNode => <SessionRow key={item.id} item={item} options={folderOptions} indent={indent} onMove={moveSession} disabled={state.status !== 'idle' && state.status !== 'error'} dragging={dragging?.type === 'session' && dragging.id === item.id} dropPosition={sessionDropTarget?.id === item.id ? sessionDropTarget.position : null} onDragStart={(event) => beginDrag('session', item.id, event)} onDragEnd={endDrag} onDragOver={(event) => dragOverSession(item.id, event)} onDrop={(event) => dropOnSession(item.id, event)} onView={() => action(async () => { setArchived(await api!.loadSession(item.id)); setDemo(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); })} onRestore={() => restoreSession(item)} editing={editingSessionId === item.id} sessionName={sessionName} onSessionNameChange={setSessionName} onRenameStart={() => startRenameSession(item)} onRenameSave={renameSession} onRenameCancel={cancelRenameSession} onDelete={() => setDeletingSession(item)}/>;
+  const renderSession = (item: SessionSummary, indent: number): React.ReactNode => <SessionRow key={item.id} item={item} options={folderOptions} indent={indent} onMove={moveSession} disabled={state.status !== 'idle' && state.status !== 'error'} selected={selectedSessionId === item.id} onSelect={() => setSelectedSessionId(item.id)} dragging={dragging?.type === 'session' && dragging.id === item.id} dropPosition={sessionDropTarget?.id === item.id ? sessionDropTarget.position : null} onDragStart={(event) => beginDrag('session', item.id, event)} onDragEnd={endDrag} onDragOver={(event) => dragOverSession(item.id, event)} onDrop={(event) => dropOnSession(item.id, event)} onView={() => action(async () => { setArchived(await api!.loadSession(item.id)); setDemo(null); setSelectedSessionId(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); })} onRestore={() => restoreSession(item)} editing={editingSessionId === item.id} sessionName={sessionName} onSessionNameChange={setSessionName} onRenameStart={() => startRenameSession(item)} onRenameSave={renameSession} onRenameCancel={cancelRenameSession} onDelete={() => setDeletingSession(item)}/>;
 
   return <div className="app-shell">
     <header className="window-titlebar">
@@ -311,7 +314,7 @@ export default function App() {
                   {!session || !session.tabs.length ? <div className="empty-state launch-empty"><div className="empty-illustration"><span/><span/><span/><GitBranch size={30}/></div><span className="eyebrow">FOLLOW YOUR CURIOSITY</span><h3>Big ideas start with a new tab.</h3><p>Launch Helium or Chrome and watch your browsing<br/>journey come together, one connection at a time.</p><button className="button primary" onClick={() => setShowLaunch(true)}><Plus size={16}/>Launch a browser</button><button className="text-button" onClick={exploreDemo}>Or take a look around with a demo <ArrowRight size={14}/></button></div> : !filtered.length ? <div className="empty-state"><Search size={30}/><h3>No tabs on this trail.</h3><p>Try a different search or show all tabs.</p><button className="button secondary" onClick={() => { setQuery(''); setFilter('all'); }}>Clear filters</button></div> : view === 'timeline' ? <Timeline tabs={filtered} allTabs={session.tabs} session={session} now={sessionNow} time={restoreTime} onTimeChange={setTimelineTime} selectedId={selectedId} onSelect={setSelectedId} onFocus={focusTab} thumbnails={showThumbnails} connections={showConnections} zoom={zoom}/> : <TabList tabs={tabsAtTimelineTime} now={restoreTime} selectedId={selectedId} currentTabId={currentTab?.id || null} onSelect={setSelectedId} onFocus={focusTab}/>} 
                 <div className="timeline-footer"><div className="legend"><span><i className="legend-line open"/>Open tab</span><span><i className="legend-line closed"/>Closed tab</span><button className={!showConnections ? 'muted' : ''} onClick={() => setShowConnections(!showConnections)} title="Toggle opener connections"><GitBranch size={13}/>Opened from</button></div><div className="zoom-controls"><button className={!showThumbnails ? 'muted' : ''} onClick={() => setShowThumbnails(!showThumbnails)} title="Toggle thumbnails" aria-label="Toggle thumbnails" aria-pressed={showThumbnails}><Image size={15}/></button><span className="control-divider"/><button onClick={() => setZoom(Math.max(1, zoom - 0.5))} disabled={zoom === 1} aria-label="Zoom out"><Minus size={14}/></button><span>{Math.round(zoom * 100)}%</span><button onClick={() => setZoom(Math.min(4, zoom + 0.5))} disabled={zoom === 4} aria-label="Zoom in"><Plus size={14}/></button><button onClick={() => setZoom(1)} aria-label="Fit timeline" title="Fit timeline"><Maximize2 size={13}/></button></div></div>
               </div>
-              {selected && session && <TabDetail tab={selected} session={session} now={sessionNow} onClose={() => setSelectedId(null)} onSelect={setSelectedId} isLive={isLive} onFocus={() => action(() => api!.focusTab(selected.id))} onCapture={() => action(async () => { const image = await api!.capture(selected.id); if (!image) throw new Error('This tab is no longer available for capture.'); }, 'Thumbnail refreshed.')} onCloseTab={() => action(() => api!.closeTab(selected.id), 'Tab closed. Its place in your timeline is saved.')}/>}
+              {selected && session && <TabDetail tab={selected} session={session} now={sessionNow} onClose={() => setSelectedId(null)} onSelect={setSelectedId} isLive={isLive} onFocus={() => action(() => api!.focusTab(selected.id))} onCapture={() => action(async () => { const image = await api!.capture(selected.id); if (!image) throw new Error('This tab is no longer available for capture.'); }, 'Thumbnail refreshed.')} onFreeze={() => action(async () => { const result = await api!.freezeTab(selected.id); if (!result.shortUrl) throw new Error('This tab could not be frozen.'); }, 'Tab frozen into a local snapshot.')} onUnfreeze={() => action(async () => { const result = await api!.unfreezeTab(selected.id); if (!result.originalUrl) throw new Error('This tab could not be returned.'); }, 'Returned to the original page.')} onCloseTab={() => action(() => api!.closeTab(selected.id), 'Tab closed. Its place in your timeline is saved.')}/>}
             </div>
             <div className="connection-bar"><div><span className={`tiny-dot ${isLive ? 'green' : demo ? 'orange' : 'gray'}`}/>{demo ? <><strong>You’re exploring a demo</strong><span>·</span><span>Launch a browser to make this timeline yours.</span></> : isLive ? <><strong>Connected to {session?.browser === 'helium' ? 'Helium' : 'Chrome'}</strong><span>·</span><span>127.0.0.1:{state.debugPort}</span></> : <><strong>{archived || session?.endedAt ? 'Session saved locally' : 'Ready to connect'}</strong><span>·</span><span>{archived || session?.endedAt ? 'Your trail is right where you left it.' : 'Helium or Chrome. Your choice.'}</span></>}</div>{demo ? <button onClick={() => setShowLaunch(true)}>Connect your browser <ArrowRight size={13}/></button> : <span className="connection-note"><ShieldCheck size={13}/>{isLive ? 'Recording locally' : 'Only on your device'}</span>}</div>
           </section>
@@ -330,6 +333,38 @@ function Stat({ icon, label, value, detail, color }: { icon: React.ReactNode; la
   return <div className="stat-card"><div className="stat-top"><span>{label}</span><span className={`stat-icon ${color}`}>{icon}</span></div><div className="stat-value">{value}<span className="stat-detail">{detail}</span></div></div>;
 }
 
+type WindowTabGroup = { key: string; window: string; tabs: BrowserTab[] };
+type DesktopTabGroup = { key: string; desktop: string; tabs: BrowserTab[]; windows: WindowTabGroup[] };
+
+function groupTabsByDesktop(tabs: BrowserTab[]): DesktopTabGroup[] {
+  const desktops = new Map<string, DesktopTabGroup>();
+  for (const tab of tabs) {
+    const desktop = tab.desktopId || 'unknown';
+    const window = tab.windowId || 'unknown';
+    let desktopGroup = desktops.get(desktop);
+    if (!desktopGroup) {
+      desktopGroup = { key: `desktop:${desktop}`, desktop, tabs: [], windows: [] };
+      desktops.set(desktop, desktopGroup);
+    }
+    let windowGroup = desktopGroup.windows.find((group) => group.window === window);
+    if (!windowGroup) {
+      windowGroup = { key: `window:${desktop}:${window}`, window, tabs: [] };
+      desktopGroup.windows.push(windowGroup);
+    }
+    desktopGroup.tabs.push(tab);
+    windowGroup.tabs.push(tab);
+  }
+  return [...desktops.values()];
+}
+
+function locationLabel(value: string, unavailable: string) {
+  return value === 'unknown' ? unavailable : value;
+}
+
+function desktopLabel(value: string) {
+  return value === 'unknown' ? 'Virtual desktop unavailable' : `Virtual desktop ${value.length > 14 ? `${value.slice(0, 8)}...` : value}`;
+}
+
 function CurrentContext({ tab, live }: { tab: BrowserTab | null; live: boolean }) {
   const desktop = tab?.desktopId && tab.desktopId !== 'unknown' ? tab.desktopId : null;
   const desktopLabel = desktop ? (desktop.length > 14 ? `${desktop.slice(0, 8)}...` : desktop) : 'Unavailable';
@@ -338,44 +373,30 @@ function CurrentContext({ tab, live }: { tab: BrowserTab | null; live: boolean }
 
 function TabList({ tabs, now, selectedId, currentTabId, onSelect, onFocus }: { tabs: BrowserTab[]; now: number; selectedId: string | null; currentTabId: string | null; onSelect: (id: string) => void; onFocus: (id: string) => void }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const groups = Array.from(tabs.reduce((map, tab) => {
-    const key = `${tab.desktopId || 'unknown'}::${tab.windowId || 'unknown'}`;
-    if (!map.has(key)) map.set(key, []);
-    map.get(key)!.push(tab);
-    return map;
-  }, new Map<string, BrowserTab[]>()).entries());
   const toggle = (key: string) => setCollapsed((prev) => {
     const next = new Set(prev);
     if (next.has(key)) next.delete(key); else next.add(key);
     return next;
   });
-  return <div className="tab-list"><div className="tab-list-heading"><span>PAGE</span><span>OPENED</span><span>DURATION</span><span>STATUS</span></div>{groups.map(([key, group]) => { const [desktop, window] = key.split('::'); const current = group.some((tab) => tab.id === currentTabId); const isCollapsed = collapsed.has(key); return <Fragment key={key}><button type="button" className={`tab-list-separator ${current ? 'current' : ''} ${isCollapsed ? 'collapsed' : ''}`} title={desktop === 'unknown' ? undefined : desktop} onClick={() => toggle(key)} aria-expanded={!isCollapsed}><span className="group-mark"><Monitor size={12}/></span><strong>{desktop === 'unknown' ? 'Virtual desktop unavailable' : `Virtual desktop ${desktop.length > 14 ? `${desktop.slice(0, 8)}...` : desktop}`}</strong><span className="group-separator">/</span><span>Window {window === 'unknown' ? 'unknown' : window}</span><span className="group-count">{group.length} {group.length === 1 ? 'tab' : 'tabs'}</span>{current && <span className="current-group-label">CURRENT</span>}<span className="separator-chevron">{isCollapsed ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</span></button>{!isCollapsed && group.map((tab) => <button key={tab.id} className={`tab-list-row ${tab.id === selectedId ? 'selected' : ''} ${tab.id === currentTabId ? 'current' : ''}`} onClick={() => onSelect(tab.id)} onDoubleClick={() => { if (!tab.closedAt) onFocus(tab.id); }}><div className="tab-list-title"><SiteIcon tab={tab}/><div><strong>{tab.title}</strong><span>{domain(tab.originalUrl || tab.url)}</span></div></div><span>{clock(tab.openedAt)}</span><span>{duration((tab.closedAt || now) - tab.openedAt)}</span><span className={`status-label ${tab.closedAt ? 'closed' : tab.frozen ? 'frozen' : 'open'}`}><span className="tiny-dot"/>{tab.closedAt ? 'Closed' : tab.frozen ? 'Frozen' : 'Open'}</span></button>)}</Fragment>; })}</div>;
+  const groups = groupTabsByDesktop(tabs);
+  return <div className="tab-list"><div className="tab-list-heading"><span>PAGE</span><span>OPENED</span><span>DURATION</span><span>STATUS</span></div>{groups.map((desktopGroup) => { const desktopCollapsed = collapsed.has(desktopGroup.key); const current = desktopGroup.tabs.some((tab) => tab.id === currentTabId); return <Fragment key={desktopGroup.key}><button type="button" className={`tab-list-separator desktop-separator ${current ? 'current' : ''} ${desktopCollapsed ? 'collapsed' : ''}`} title={desktopGroup.desktop === 'unknown' ? undefined : desktopGroup.desktop} onClick={() => toggle(desktopGroup.key)} aria-expanded={!desktopCollapsed}><span className="group-mark"><Monitor size={12}/></span><strong>{desktopLabel(desktopGroup.desktop)}</strong><span className="group-count">{desktopGroup.tabs.length} {desktopGroup.tabs.length === 1 ? 'tab' : 'tabs'}</span>{current && <span className="current-group-label">CURRENT</span>}<span className="separator-chevron">{desktopCollapsed ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</span></button>{!desktopCollapsed && desktopGroup.windows.map((windowGroup) => { const windowCollapsed = collapsed.has(windowGroup.key); return <Fragment key={windowGroup.key}><button type="button" className={`tab-list-separator window-separator ${windowGroup.tabs.some((tab) => tab.id === currentTabId) ? 'current' : ''} ${windowCollapsed ? 'collapsed' : ''}`} onClick={() => toggle(windowGroup.key)} aria-expanded={!windowCollapsed}><span className="group-mark"><Monitor size={11}/></span><span>Window {locationLabel(windowGroup.window, 'unknown')}</span><span className="group-count">{windowGroup.tabs.length} {windowGroup.tabs.length === 1 ? 'tab' : 'tabs'}</span><span className="separator-chevron">{windowCollapsed ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</span></button>{!windowCollapsed && windowGroup.tabs.map((tab) => <button key={tab.id} className={`tab-list-row ${tab.id === selectedId ? 'selected' : ''} ${tab.id === currentTabId ? 'current' : ''}`} onClick={() => onSelect(tab.id)} onDoubleClick={() => { if (!tab.closedAt) onFocus(tab.id); }}><div className="tab-list-title"><SiteIcon tab={tab}/><div><strong>{tab.title}</strong><span>{domain(tab.originalUrl || tab.url)}</span></div></div><span>{clock(tab.openedAt)}</span><span>{duration((tab.closedAt || now) - tab.openedAt)}</span><span className={`status-label ${tab.closedAt ? 'closed' : tab.frozen ? 'frozen' : 'open'}`}><span className="tiny-dot"/>{tab.closedAt ? 'Closed' : tab.frozen ? 'Frozen' : 'Open'}</span></button>)}</Fragment>; })}</Fragment>; })}</div>;
 }
 
-function SessionRow({ item, options, onMove, onView, onRestore, disabled, indent, dragging, dropPosition, onDragStart, onDragEnd, onDragOver, onDrop, editing, sessionName, onSessionNameChange, onRenameStart, onRenameSave, onRenameCancel, onDelete }: { item: SessionSummary; options: { folder: Folder; depth: number }[]; onMove: (sessionId: string, folderId: string | null) => void; onView: () => void; onRestore: () => void; disabled: boolean; indent: number; dragging: boolean; dropPosition: 'before' | 'after' | null; onDragStart: (event: React.DragEvent) => void; onDragEnd: () => void; onDragOver: (event: React.DragEvent) => void; onDrop: (event: React.DragEvent) => void; editing: boolean; sessionName: string; onSessionNameChange: (value: string) => void; onRenameStart: () => void; onRenameSave: () => void; onRenameCancel: () => void; onDelete: () => void }) {
-  return <div className={`saved-session ${dragging ? 'dragging' : ''} ${dropPosition ? `drop-${dropPosition}` : ''} ${editing ? 'editing' : ''}`} style={{ paddingLeft: indent }} onDragOver={onDragOver} onDrop={onDrop}>{editing ? <div className="session-rename"><input autoFocus aria-label="Rename session" value={sessionName} onChange={(event) => onSessionNameChange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') onRenameSave(); if (event.key === 'Escape') onRenameCancel(); }}/><button onClick={onRenameSave} aria-label="Save session name"><Check size={14}/></button><button onClick={onRenameCancel} aria-label="Cancel"><X size={14}/></button></div> : <><button className="saved-session-view" draggable onClick={onView} onDragStart={onDragStart} onDragEnd={onDragEnd} title="Drag to reorder"><span className="saved-session-icon"><FolderClock size={22}/></span><div><strong>{item.name}</strong><span>{date(item.startedAt)} · {clock(item.startedAt)} · {item.browser === 'helium' ? 'Helium' : 'Chrome'}</span></div><span>{item.tabCount} tabs</span><ArrowRight size={18}/></button><label className="saved-session-folder" title="Move to folder"><FolderOpen size={13}/><span className="select-wrap"><select aria-label={`Move ${item.name} to folder`} value={item.folderId || ''} onChange={(event) => onMove(item.id, event.target.value || null)}><option value="">Unfiled</option>{options.map(({ folder, depth: optionDepth }) => <option key={folder.id} value={folder.id}>{'\u00A0'.repeat(optionDepth * 2)}{folder.name}</option>)}</select><ChevronDown size={13}/></span></label><div className="saved-session-actions"><button onClick={onRenameStart} aria-label={`Rename ${item.name}`} title="Rename session"><Pencil size={13}/></button><button onClick={onDelete} aria-label={`Delete ${item.name}`} title="Delete session"><Trash2 size={13}/></button></div><button className="button secondary restore-session" disabled={disabled} onClick={onRestore}><RefreshCw size={14}/>Restore</button></>}</div>;
+function SessionRow({ item, options, onMove, onView, onRestore, disabled, indent, selected, onSelect, dragging, dropPosition, onDragStart, onDragEnd, onDragOver, onDrop, editing, sessionName, onSessionNameChange, onRenameStart, onRenameSave, onRenameCancel, onDelete }: { item: SessionSummary; options: { folder: Folder; depth: number }[]; onMove: (sessionId: string, folderId: string | null) => void; onView: () => void; onRestore: () => void; disabled: boolean; indent: number; selected: boolean; onSelect: () => void; dragging: boolean; dropPosition: 'before' | 'after' | null; onDragStart: (event: React.DragEvent) => void; onDragEnd: () => void; onDragOver: (event: React.DragEvent) => void; onDrop: (event: React.DragEvent) => void; editing: boolean; sessionName: string; onSessionNameChange: (value: string) => void; onRenameStart: () => void; onRenameSave: () => void; onRenameCancel: () => void; onDelete: () => void }) {
+  return <div className={`saved-session ${selected ? 'selected' : ''} ${dragging ? 'dragging' : ''} ${dropPosition ? `drop-${dropPosition}` : ''} ${editing ? 'editing' : ''}`} style={{ paddingLeft: indent }} onDragOver={onDragOver} onDrop={onDrop}>{editing ? <div className="session-rename"><input autoFocus aria-label="Rename session" value={sessionName} onChange={(event) => onSessionNameChange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') onRenameSave(); if (event.key === 'Escape') onRenameCancel(); }}/><button onClick={onRenameSave} aria-label="Save session name"><Check size={14}/></button><button onClick={onRenameCancel} aria-label="Cancel"><X size={14}/></button></div> : <><button className="saved-session-view" draggable onClick={onSelect} onDoubleClick={onView} onDragStart={onDragStart} onDragEnd={onDragEnd} title="Click to select, double-click to open"><span className="saved-session-icon"><FolderClock size={22}/></span><div><strong>{item.name}</strong><span>{date(item.startedAt)} · {clock(item.startedAt)} · {item.browser === 'helium' ? 'Helium' : 'Chrome'}</span></div><span>{item.tabCount} tabs</span><ArrowRight size={18}/></button><label className="saved-session-folder" title="Move to folder"><FolderOpen size={13}/><span className="select-wrap"><select aria-label={`Move ${item.name} to folder`} value={item.folderId || ''} onChange={(event) => onMove(item.id, event.target.value || null)}><option value="">Unfiled</option>{options.map(({ folder, depth: optionDepth }) => <option key={folder.id} value={folder.id}>{'\u00A0'.repeat(optionDepth * 2)}{folder.name}</option>)}</select><ChevronDown size={13}/></span></label><div className="saved-session-actions"><button onClick={onRenameStart} aria-label={`Rename ${item.name}`} title="Rename session"><Pencil size={13}/></button><button onClick={onDelete} aria-label={`Delete ${item.name}`} title="Delete session"><Trash2 size={13}/></button></div><button className="button secondary restore-session" disabled={disabled} onClick={onRestore}><RefreshCw size={14}/>Restore</button></>}</div>;
 }
 
 function Timeline({ tabs, allTabs, session, now, time, onTimeChange, selectedId, onSelect, onFocus, thumbnails, connections, zoom }: { tabs: BrowserTab[]; allTabs: BrowserTab[]; session: Session; now: number; time: number; onTimeChange: (time: number) => void; selectedId: string | null; onSelect: (id: string) => void; onFocus: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const groups = Array.from(tabs.reduce((map, tab) => {
-    const key = `${tab.desktopId || 'unknown'}::${tab.windowId || 'unknown'}`;
-    if (!map.has(key)) map.set(key, []);
-    map.get(key)!.push(tab);
-    return map;
-  }, new Map<string, BrowserTab[]>()).entries()).map(([key, group]) => {
-    const [desktop, window] = key.split('::');
-    return { key, desktop, window, tabs: group };
-  });
   const toggle = (key: string) => setCollapsed((prev) => {
     const next = new Set(prev);
     if (next.has(key)) next.delete(key); else next.add(key);
     return next;
   });
-  return <TimelineCanvas groups={groups} allTabs={allTabs} session={session} now={now} time={time} onTimeChange={onTimeChange} selectedId={selectedId} onSelect={onSelect} onFocus={onFocus} thumbnails={thumbnails} connections={connections} zoom={zoom} collapsed={collapsed} onToggle={toggle}/>;
+  return <TimelineCanvas groups={groupTabsByDesktop(tabs)} allTabs={allTabs} session={session} now={now} time={time} onTimeChange={onTimeChange} selectedId={selectedId} onSelect={onSelect} onFocus={onFocus} thumbnails={thumbnails} connections={connections} zoom={zoom} collapsed={collapsed} onToggle={toggle}/>;
 }
 
-function TimelineCanvas({ groups, allTabs, session, now, time, onTimeChange, selectedId, onSelect, onFocus, thumbnails, connections, zoom, collapsed, onToggle }: { groups: { key: string; desktop: string; window: string; tabs: BrowserTab[] }[]; allTabs: BrowserTab[]; session: Session; now: number; time: number; onTimeChange: (time: number) => void; selectedId: string | null; onSelect: (id: string) => void; onFocus: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number; collapsed: Set<string>; onToggle: (key: string) => void }) {
+function TimelineCanvas({ groups, allTabs, session, now, time, onTimeChange, selectedId, onSelect, onFocus, thumbnails, connections, zoom, collapsed, onToggle }: { groups: DesktopTabGroup[]; allTabs: BrowserTab[]; session: Session; now: number; time: number; onTimeChange: (time: number) => void; selectedId: string | null; onSelect: (id: string) => void; onFocus: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number; collapsed: Set<string>; onToggle: (key: string) => void }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [draggingTime, setDraggingTime] = useState(false);
@@ -413,26 +434,47 @@ function TimelineCanvas({ groups, allTabs, session, now, time, onTimeChange, sel
   const headerHeight = 35;
   const headingHeight = 34;
 
-  const sections = groups.map((group) => ({ ...group, isCollapsed: collapsed.has(group.key) }));
+  const sections = groups.map((group) => ({ ...group, isCollapsed: collapsed.has(group.key), windows: group.windows.map((window) => ({ ...window, isCollapsed: collapsed.has(window.key) })) }));
   let cursor = headerHeight;
   const rowY = new Map<string, number>();
   const visibleTabs: BrowserTab[] = [];
   for (const section of sections) {
     cursor += headingHeight;
     if (!section.isCollapsed) {
-      for (const tab of section.tabs) {
-        rowY.set(tab.id, cursor + rowHeight / 2);
-        visibleTabs.push(tab);
-        cursor += rowHeight;
+      for (const window of section.windows) {
+        cursor += headingHeight;
+        if (!window.isCollapsed) {
+          for (const tab of window.tabs) {
+            rowY.set(tab.id, cursor + rowHeight / 2);
+            visibleTabs.push(tab);
+            cursor += rowHeight;
+          }
+        }
       }
     }
   }
   const contentHeight = Math.max(460, cursor + 34);
 
+  const renderTab = (tab: BrowserTab) => {
+    const left = x(tab.openedAt);
+    const barWidth = Math.max(8, x(tab.closedAt || now) - left);
+    const showImage = thumbnails && barWidth > 160;
+    const number = allTabs.findIndex((item) => item.id === tab.id) + 1;
+    return <div className={`timeline-row ${selectedId === tab.id ? 'selected' : ''}`} key={tab.id} style={{ height: rowHeight }}>
+      <span className="row-number">{String(number).padStart(2, '0')}</span>
+      <button title={`${tab.title}\n${tab.originalUrl || tab.url}\nOpened ${clock(tab.openedAt)}${tab.closedAt ? ` · Closed ${clock(tab.closedAt)}` : ' · Still open'}${tab.frozen ? '\nFrozen snapshot' : ''}${tab.groupTitle ? `\nGroup: ${tab.groupTitle}` : ''}`} aria-label={`View ${tab.title}`} className={`tab-bar ${siteColor(tab)} ${tab.closedAt ? 'is-closed' : ''} ${tab.frozen ? 'is-frozen' : ''} ${selectedId === tab.id ? 'is-selected' : ''} ${barWidth < 120 ? 'compact' : ''}`} style={{ left, width: barWidth }} onClick={() => onSelect(tab.id)} onDoubleClick={() => { if (!tab.closedAt) onFocus(tab.id); }}>
+        {showImage && <span className="bar-thumbnail">{tab.thumbnail ? <img src={tab.thumbnail} alt={`Thumbnail of ${tab.title}`}/> : <Globe2 size={23}/>}</span>}
+        <span className="bar-content"><span className="bar-title"><SiteIcon tab={tab} size="small"/><strong>{tab.title}</strong>{tab.frozen && <span className="group-chip frozen-chip">FROZEN</span>}{tab.groupTitle && <span className="group-chip" style={{ '--group-color': tab.groupColor || '#9ca8bb' } as React.CSSProperties}>{tab.groupTitle}</span>}{tab.closedAt && barWidth > 200 && <X size={11}/>}</span><span className="bar-subtitle">{domain(tab.originalUrl || tab.url)}<span>·</span>{duration((tab.closedAt || now) - tab.openedAt)}</span></span>
+        {!tab.closedAt && <span className="bar-end-dot"/>}
+      </button>
+      {barWidth < 120 && <button className="overflow-tab-label" style={{ left: Math.min(left + barWidth + 7, width - 115) }} onClick={() => onSelect(tab.id)} onDoubleClick={() => { if (!tab.closedAt) onFocus(tab.id); }}>{siteName(tab)}</button>}
+    </div>;
+  };
+
   return <div className="timeline-scroll" ref={viewportRef}><div className="timeline-canvas" ref={canvasRef} style={{ width, minHeight: contentHeight }}>
-     <div className="axis-header"><span className="axis-start">TIME</span>{Array.from({ length: 6 }, (_, i) => <span key={i} style={{ left: padding + i * plotWidth / 5 }}>{clock(session.startedAt + span * i / 5)}</span>)}</div>
-     <div className="grid-lines">{Array.from({ length: 6 }, (_, i) => <i key={i} style={{ left: padding + i * plotWidth / 5 }}/>)}</div>
-     <div className={`now-line ${draggingTime ? 'dragging' : ''}`} style={{ left: nowX }} role="slider" aria-label="Timeline position" aria-valuemin={session.startedAt} aria-valuemax={session.endedAt || now} aria-valuenow={time} tabIndex={0} onPointerDown={startTimeDrag} onPointerMove={moveTimeDrag} onPointerUp={endTimeDrag} onPointerCancel={endTimeDrag} onKeyDown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); const step = Math.max(1000, Math.round(span / 100)); onTimeChange(Math.max(session.startedAt, Math.min(session.endedAt || now, time + (event.key === 'ArrowRight' ? step : -step)))); } }}><span>{clock(time)}</span><i/></div>
+    <div className="axis-header"><span className="axis-start">TIME</span>{Array.from({ length: 6 }, (_, i) => <span key={i} style={{ left: padding + i * plotWidth / 5 }}>{clock(session.startedAt + span * i / 5)}</span>)}</div>
+    <div className="grid-lines">{Array.from({ length: 6 }, (_, i) => <i key={i} style={{ left: padding + i * plotWidth / 5 }}/>)}</div>
+    <div className={`now-line ${draggingTime ? 'dragging' : ''}`} style={{ left: nowX }} role="slider" aria-label="Timeline position" aria-valuemin={session.startedAt} aria-valuemax={session.endedAt || now} aria-valuenow={time} tabIndex={0} onPointerDown={startTimeDrag} onPointerMove={moveTimeDrag} onPointerUp={endTimeDrag} onPointerCancel={endTimeDrag} onKeyDown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); const step = Math.max(1000, Math.round(span / 100)); onTimeChange(Math.max(session.startedAt, Math.min(session.endedAt || now, time + (event.key === 'ArrowRight' ? step : -step)))); } }}><span>{clock(time)}</span><i/></div>
     {connections && <svg className="connections" width={width} height={contentHeight} aria-label="Tab opener connections"><defs><marker id="arrow" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#b09a7b" strokeWidth="1.2"/></marker><marker id="arrow-selected" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#d49b58" strokeWidth="1.2"/></marker></defs>{visibleTabs.map((tab) => {
       const openerId = tab.openerId;
       if (!openerId) return null;
@@ -448,18 +490,18 @@ function TimelineCanvas({ groups, allTabs, session, now, time, onTimeChange, sel
       const active = tab.id === selectedId || tab.openerId === selectedId;
       return <path key={tab.id} d={`M ${sourceX} ${sourceY} L ${sourceX} ${targetY - bend} Q ${sourceX} ${targetY} ${sourceX + 9} ${targetY} L ${targetX - 3} ${targetY}`} stroke={active ? '#d49b58' : '#b7aa98'} strokeWidth={active ? 1.6 : 1.2} opacity={active ? 1 : 0.65} fill="none" markerEnd={`url(#${active ? 'arrow-selected' : 'arrow'})`}/>;
     })}</svg>}
-    <div className="timeline-rows">{sections.map((section) => <Fragment key={section.key}><button type="button" className={`timeline-separator ${section.isCollapsed ? 'collapsed' : ''}`} onClick={() => onToggle(section.key)} aria-expanded={!section.isCollapsed}><span className="group-mark"><Monitor size={13}/></span><strong>{section.desktop === 'unknown' ? 'Virtual desktop not available' : `Virtual desktop ${section.desktop}`}</strong><span className="group-separator">/</span><span>Window {section.window === 'unknown' ? 'unknown' : section.window}</span><span className="group-count">{section.tabs.length} {section.tabs.length === 1 ? 'tab' : 'tabs'}</span><span className="separator-chevron">{section.isCollapsed ? <ChevronRight size={13}/> : <ChevronDown size={13}/>}</span></button>{!section.isCollapsed && section.tabs.map((tab) => {
-      const left = x(tab.openedAt);
-      const barWidth = Math.max(8, x(tab.closedAt || now) - left);
-      const showImage = thumbnails && barWidth > 160;
-      const number = allTabs.findIndex((item) => item.id === tab.id) + 1;
-        return <div className={`timeline-row ${selectedId === tab.id ? 'selected' : ''}`} key={tab.id} style={{ height: rowHeight }}><span className="row-number">{String(number).padStart(2, '0')}</span><button title={`${tab.title}\n${tab.originalUrl || tab.url}\nOpened ${clock(tab.openedAt)}${tab.closedAt ? ` · Closed ${clock(tab.closedAt)}` : ' · Still open'}${tab.frozen ? '\nFrozen snapshot' : ''}${tab.groupTitle ? `\nGroup: ${tab.groupTitle}` : ''}`} aria-label={`View ${tab.title}`} className={`tab-bar ${siteColor(tab)} ${tab.closedAt ? 'is-closed' : ''} ${tab.frozen ? 'is-frozen' : ''} ${selectedId === tab.id ? 'is-selected' : ''} ${barWidth < 120 ? 'compact' : ''}`} style={{ left, width: barWidth }} onClick={() => onSelect(tab.id)} onDoubleClick={() => { if (!tab.closedAt) onFocus(tab.id); }}>{showImage && <span className="bar-thumbnail">{tab.thumbnail ? <img src={tab.thumbnail} alt={`Thumbnail of ${tab.title}`}/> : <Globe2 size={23}/>}</span>}<span className="bar-content"><span className="bar-title"><SiteIcon tab={tab} size="small"/><strong>{tab.title}</strong>{tab.frozen && <span className="group-chip frozen-chip">FROZEN</span>}{tab.groupTitle && <span className="group-chip" style={{ '--group-color': tab.groupColor || '#9ca8bb' } as React.CSSProperties}>{tab.groupTitle}</span>}{tab.closedAt && barWidth > 200 && <X size={11}/>}</span><span className="bar-subtitle">{domain(tab.originalUrl || tab.url)}<span>·</span>{duration((tab.closedAt || now) - tab.openedAt)}</span></span>{!tab.closedAt && <span className="bar-end-dot"/>}</button>{barWidth < 120 && <button className="overflow-tab-label" style={{ left: Math.min(left + barWidth + 7, width - 115) }} onClick={() => onSelect(tab.id)} onDoubleClick={() => { if (!tab.closedAt) onFocus(tab.id); }}>{siteName(tab)}</button>}</div>;
-    })}</Fragment>)}</div>
+    <div className="timeline-rows">{sections.map((section) => <Fragment key={section.key}>
+      <button type="button" className={`timeline-separator desktop-separator ${section.isCollapsed ? 'collapsed' : ''}`} onClick={() => onToggle(section.key)} aria-expanded={!section.isCollapsed}><span className="group-mark"><Monitor size={13}/></span><strong>{desktopLabel(section.desktop)}</strong><span className="group-count">{section.tabs.length} {section.tabs.length === 1 ? 'tab' : 'tabs'}</span><span className="separator-chevron">{section.isCollapsed ? <ChevronRight size={13}/> : <ChevronDown size={13}/>}</span></button>
+      {!section.isCollapsed && section.windows.map((window) => <Fragment key={window.key}>
+        <button type="button" className={`timeline-separator timeline-window-separator ${window.isCollapsed ? 'collapsed' : ''}`} onClick={() => onToggle(window.key)} aria-expanded={!window.isCollapsed}><span className="group-mark"><Monitor size={12}/></span><strong>Window {locationLabel(window.window, 'unknown')}</strong><span className="group-count">{window.tabs.length} {window.tabs.length === 1 ? 'tab' : 'tabs'}</span><span className="separator-chevron">{window.isCollapsed ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</span></button>
+        {!window.isCollapsed && window.tabs.map(renderTab)}
+      </Fragment>)}
+    </Fragment>)}</div>
     <div className="timeline-start-note" style={{ left: padding }}><span/>The start of something</div>
   </div></div>;
 }
 
-function TabDetail({ tab, session, now, onClose, onSelect, isLive, onFocus, onCapture, onCloseTab }: { tab: BrowserTab; session: Session; now: number; onClose: () => void; onSelect: (id: string) => void; isLive: boolean; onFocus: () => void; onCapture: () => void; onCloseTab: () => void }) {
+function TabDetail({ tab, session, now, onClose, onSelect, isLive, onFocus, onCapture, onFreeze, onUnfreeze, onCloseTab }: { tab: BrowserTab; session: Session; now: number; onClose: () => void; onSelect: (id: string) => void; isLive: boolean; onFocus: () => void; onCapture: () => void; onFreeze: () => void; onUnfreeze: () => void; onCloseTab: () => void }) {
   const [busy, setBusy] = useState(false);
   const opener = session.tabs.find((item) => item.id === tab.openerId);
   const children = session.tabs.filter((item) => item.openerId === tab.id);
@@ -472,7 +514,7 @@ function TabDetail({ tab, session, now, onClose, onSelect, isLive, onFocus, onCa
     <div className="detail-section navigation-section"><div className="detail-section-label"><Clock3 size={14}/><span>PAGE HISTORY</span><span className="count-pill">{tab.navigations.length}</span></div>{tab.navigations.slice(-4).reverse().map((nav, i) => <div className="navigation-item" key={`${nav.at}-${i}`}><span className="navigation-dot"/><div><strong title={nav.url}>{nav.title || domain(nav.url)}</strong><span>{clock(nav.at)}</span></div></div>)}{tab.navigations.length > 4 && <span className="history-more">+ {tab.navigations.length - 4} earlier pages in the export</span>}</div>
     {tab.groupHistory.length > 1 && <div className="detail-section navigation-section"><div className="detail-section-label"><Layers3 size={14}/><span>GROUP HISTORY</span><span className="count-pill">{tab.groupHistory.length - 1}</span></div>{tab.groupHistory.slice(1).reverse().map((group, i) => <div className="navigation-item" key={`${group.at}-${i}`}><span className="navigation-dot"/><div><strong>{group.title || 'Removed from tab group'}</strong><span>{clock(group.at)} · group membership event</span></div></div>)}</div>}
     {tab.windowHistory.length > 1 && <div className="detail-section navigation-section"><div className="detail-section-label"><Monitor size={14}/><span>WINDOW MOVEMENT</span><span className="count-pill">{tab.windowHistory.length - 1}</span></div>{tab.windowHistory.slice(1).reverse().map((move, i) => <div className="navigation-item" key={`${move.at}-${i}`}><span className="navigation-dot"/><div><strong>Moved to window {move.windowId}</strong><span>{clock(move.at)} · captured independently of page activity</span></div></div>)}</div>}
-    {isLive && !tab.closedAt ? <div className="detail-actions"><button className="button secondary full-width" onClick={onFocus}>Go to tab<ExternalLink size={14}/></button><button className="text-button close-tab-button" onClick={onCloseTab}><X size={13}/>Close browser tab</button></div> : <div className="detail-footnote"><ShieldCheck size={12}/>{session.id === 'demo' ? 'A little preview of what’s possible.' : 'This moment is saved on your device.'}</div>}
+      {isLive && !tab.closedAt ? <div className="detail-actions"><button className="button secondary full-width" onClick={onFocus}>Go to tab<ExternalLink size={14}/></button>{tab.frozen ? <button className="button secondary full-width" onClick={onUnfreeze}><RefreshCw size={14}/>Return to original page</button> : <button className="button secondary full-width" onClick={onFreeze}><Snowflake size={14}/>Freeze tab</button>}<button className="text-button close-tab-button" onClick={onCloseTab}><X size={13}/>Close browser tab</button></div> : <div className="detail-footnote"><ShieldCheck size={12}/>{session.id === 'demo' ? 'A little preview of what\'s possible.' : 'This moment is saved on your device.'}</div>}
   </div></aside>;
 }
 

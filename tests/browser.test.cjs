@@ -240,6 +240,35 @@ test('freeze all skips a persistent whitelist across browser windows', async () 
   clearTimeout(controller.persistTimer);
 });
 
+test('freeze all can exclude the active tab', async () => {
+  const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-freezer-exclude-')));
+  controller.status = 'live';
+  controller.session = { tabs: [
+    { id: 'current', title: 'Current', url: 'https://current.example', closedAt: null, extensionTabId: 1, extensionWindowId: 10, thumbnail: null },
+    { id: 'other', title: 'Other', url: 'https://other.example', closedAt: null, extensionTabId: 2, extensionWindowId: 20, thumbnail: null },
+  ] };
+  controller.capture = async (id) => { const tab = controller.session.tabs.find((item) => item.id === id); tab.thumbnail = 'data:image/jpeg;base64,eA=='; return tab.thumbnail; };
+  const result = await controller.freezeAllTabs([
+    { targetId: 'current', tabId: 1, windowId: 10, url: 'https://current.example', title: 'Current' },
+    { targetId: 'other', tabId: 2, windowId: 20, url: 'https://other.example', title: 'Other' },
+  ], { targetId: 'current', tabId: 1, windowId: 10 });
+  assert.deepEqual(result.items.map((item) => item.targetId), ['other']);
+  assert.equal(result.windows, 1);
+  assert.equal(controller.freezer.entries.some((entry) => entry.originalUrl === 'https://current.example'), false);
+  clearTimeout(controller.persistTimer);
+});
+
+test('closes a tab addressed by companion extension identity', async () => {
+  const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-close-')));
+  controller.status = 'live';
+  controller.session = { tabs: [{ id: 'target', closedAt: null, extensionTabId: 4, extensionWindowId: 8 }] };
+  let closedId;
+  controller.closeTab = async (id) => { closedId = id; };
+  await controller.closeTabByInfo({ tabId: 4, windowId: 8 });
+  assert.equal(closedId, 'target');
+  clearTimeout(controller.persistTimer);
+});
+
 test('captures after five inactive minutes and freezes at ten without recapturing', async () => {
   const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-inactive-')));
   controller.status = 'live';
