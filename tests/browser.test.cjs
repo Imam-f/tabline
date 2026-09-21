@@ -8,6 +8,7 @@ const { BrowserController } = require('../electron/browser.cjs');
 test('tracks one lifetime per page, preserves opener and records actual navigations', () => {
   const session = { tabs: [] };
   assert.equal(upsertTarget(session, { type: 'service_worker', targetId: 'worker' }, 10), null);
+  assert.equal(upsertTarget(session, { type: 'page', targetId: 'extension', url: 'chrome-extension://tabline/popup.html' }, 10), null);
   const tab = upsertTarget(session, { type: 'page', targetId: 'child', openerId: 'parent', url: 'https://example.com', title: '' }, 100);
   upsertTarget(session, { type: 'page', targetId: 'child', url: 'https://example.com', title: 'Example' }, 110);
   assert.equal(tab.navigations.length, 1);
@@ -207,6 +208,27 @@ test('freeze all skips a persistent whitelist across browser windows', async () 
   assert.equal(result.windows, 2);
   const reloaded = new BrowserController(controller.dataDir);
   assert.deepEqual(reloaded.freezer.whitelist, ['https://two.example']);
+  clearTimeout(controller.persistTimer);
+});
+
+test('captures after five inactive minutes and freezes at ten without recapturing', async () => {
+  const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-inactive-')));
+  controller.status = 'live';
+  controller.session = { tabs: [{ id: 'target', title: 'Example', url: 'https://example.com', closedAt: null, extensionTabId: 4, active: false, lastActiveAt: Date.now() - 6 * 60 * 1000, inactiveScreenshotAt: null, thumbnail: null }] };
+  let captures = 0;
+  let freezeOptions;
+  let navigated;
+  controller.capture = async () => { captures++; controller.session.tabs[0].thumbnail = 'data:image/jpeg;base64,eA=='; return controller.session.tabs[0].thumbnail; };
+  controller.freezeTab = async (_info, options) => { freezeOptions = options; return { shortUrl: 'http://127.0.0.1:17637/s/idle', slug: 'idle' }; };
+  controller.navigateTab = async (id, url) => { navigated = { id, url }; };
+  await controller.checkInactiveTabs();
+  assert.equal(captures, 1);
+  assert.equal(navigated, undefined);
+  controller.session.tabs[0].lastActiveAt = Date.now() - 11 * 60 * 1000;
+  await controller.checkInactiveTabs();
+  assert.equal(captures, 1);
+  assert.deepEqual(freezeOptions, { capture: false });
+  assert.deepEqual(navigated, { id: 'target', url: 'http://127.0.0.1:17637/s/idle' });
   clearTimeout(controller.persistTimer);
 });
 

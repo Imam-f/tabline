@@ -51,7 +51,12 @@ function validStartUrl(input) {
 }
 
 function upsertTarget(session, info, now = Date.now()) {
-  if (info.type !== 'page' || info.url?.startsWith('chrome-extension://')) return null;
+  if (info.type !== 'page') return null;
+  if (info.url?.startsWith('chrome-extension://')) {
+    const extensionTab = session.tabs.findIndex((item) => item.id === info.targetId);
+    if (extensionTab >= 0) session.tabs.splice(extensionTab, 1);
+    return null;
+  }
   let tab = session.tabs.find((item) => item.id === info.targetId);
   if (!tab) {
     tab = { id: info.targetId, title: info.title || 'New tab', url: info.url || 'about:blank', openedAt: now, closedAt: null, openAtEnd: true, openerId: info.openerId || null, windowId: info.windowId || null, desktopId: info.desktopId || 'unknown', windowHistory: [], extensionTabId: null, extensionWindowId: null, tabIndex: null, pinned: false, active: false, lastActiveAt: null, inactiveScreenshotAt: null, frozen: false, frozenSlug: null, originalUrl: null, orderHistory: [], groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [], thumbnail: null, thumbnailAt: null, navigations: [] };
@@ -345,7 +350,7 @@ class BrowserController extends EventEmitter {
       targetInfos.forEach((info) => this.onTarget(info));
       this.interval = setInterval(() => this.captureAll(), 60000);
       this.locationInterval = setInterval(() => this.refreshAllTargetLocations().catch(() => {}), 1000);
-      this.inactivityInterval = setInterval(() => this.checkInactiveTabs().catch(() => {}), 5000);
+      this.inactivityInterval = setInterval(() => this.checkInactiveTabs().catch(() => {}), 1000);
       await this.refreshAllTargetLocations();
       this.publish();
       return this.snapshot();
@@ -362,6 +367,11 @@ class BrowserController extends EventEmitter {
 
   onTarget(info) {
     if (!this.session) return;
+    if (info.type === 'page' && info.url?.startsWith('chrome-extension://')) {
+      const index = this.session.tabs.findIndex((item) => item.id === info.targetId);
+      if (index >= 0) { this.session.tabs.splice(index, 1); this.publish(); }
+      return;
+    }
     const previous = this.session.tabs.find((tab) => tab.id === info.targetId);
     const frozenEntry = this.entryForUrl(info.url);
     const previousFrozenEntry = this.entryForTab(previous);
@@ -611,6 +621,7 @@ class BrowserController extends EventEmitter {
             tab.inactiveScreenshotAt = now;
             this.publish();
           }
+          if (tab.active) { tab.inactiveScreenshotAt = null; continue; }
           if (inactiveFor >= inactivityFreezeAfter && !tab.active && !tab.frozen) {
             const result = await this.freezeTab({ targetId: tab.id }, { capture: false });
             if (result.shortUrl) await this.navigateTab(tab.id, result.shortUrl);
