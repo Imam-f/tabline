@@ -108,16 +108,35 @@ The browser integration check detects an installed browser, launches it with a t
 
 ```text
 electron/
-  main.cjs       Electron window, IPC, and lifecycle
-  preload.cjs    Sandboxed renderer bridge
-  browser.cjs    Browser launch, tracking, capture, persistence
-  cdp.cjs        DevTools WebSocket client
+  main.cjs                Electron window, IPC, and lifecycle
+  preload.cjs             Sandboxed renderer bridge
+  browser.cjs             Browser launch, tracking, capture, persistence, restore, freezer
+  cdp.cjs                 DevTools WebSocket client
+  virtual-desktop.cjs     Windows virtual-desktop helper process bridge
+  virtual-desktop.ps1     Native Windows desktop lookup and window placement
+  tabline-extension/
+    manifest.json         Companion extension configuration
+    background.js         Tab metadata reporting and inactivity freezing
+    popup.html            Companion popup markup
+    popup.js              Freeze, return, whitelist, and close controls
+    popup.css             Companion popup styles
 src/
-  App.tsx        Timeline, tab details, launcher, saved sessions
-  demo.ts        Clearly labeled interactive demo data
-  styles.css     Responsive desktop interface
+  main.tsx                React renderer entry point
+  App.tsx                 Timeline, tab details, launcher, saved sessions
+  types.ts                Session, tab, and preload API types
+  demo.ts                 Clearly labeled interactive demo data
+  styles.css              Responsive desktop interface
 scripts/
-  browser-smoke.cjs
+  start-electron.cjs      Desktop launcher for development and built app
+  browser-smoke.cjs       Real-browser integration check
+  desktop-smoke.cjs       Production Electron UI and preload end-to-end check
+  desktop-harness.cjs     Isolated user-data setup for the desktop check
 tests/
-  browser.test.cjs
+  browser.test.cjs        Automated browser-controller and CDP tests
+docs/                    README screenshots
+public/                  Static renderer assets
+index.html               Renderer HTML entry point
+vite.config.ts           Renderer development and build configuration
+tsconfig.json            TypeScript configuration
+package.json             Dependencies, scripts, and desktop packaging configuration
 ```
