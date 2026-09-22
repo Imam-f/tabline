@@ -63,13 +63,14 @@ export default function App() {
   const [creatingSubfolder, setCreatingSubfolder] = useState<string | null>(null);
   const [folderName, setFolderName] = useState('');
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
-  const [dragging, setDragging] = useState<{ type: 'folder' | 'session'; id: string } | null>(null);
+  const [dragging, setDragging] = useState<{ type: 'folder'; id: string } | { type: 'session'; id: string; ids: string[] } | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [sessionDropTarget, setSessionDropTarget] = useState<{ id: string; position: 'before' | 'after' } | null>(null);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set());
+  const sessionSelectionAnchor = useRef<string | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [sessionName, setSessionName] = useState('');
-  const [deletingSession, setDeletingSession] = useState<SessionSummary | null>(null);
+  const [deletingSessionIds, setDeletingSessionIds] = useState<string[] | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const session = demo || archived || state.session;
   const isLive = !demo && !archived && state.status === 'live';
@@ -103,6 +104,12 @@ export default function App() {
   }, []);
   useEffect(() => { if (state.error) setToast(state.error); }, [state.error]);
   useEffect(() => { setTimelineTime(null); }, [session?.id]);
+  useEffect(() => {
+    if (selectedSessionIds.size > 1 && editingSessionId) {
+      setEditingSessionId(null);
+      setSessionName('');
+    }
+  }, [editingSessionId, selectedSessionIds.size]);
 
   async function action(operation: () => Promise<unknown>, success?: string) {
     try { await operation(); if (success) setToast(success); } catch (error) { setToast(error instanceof Error ? error.message : 'Something went wrong. Please try again.'); }
@@ -125,7 +132,9 @@ export default function App() {
     if (!api) return;
     const [nextSessions, nextFolders] = await Promise.all([api.listSessions(), api.listFolders()]);
     setSessions(nextSessions);
-    setSelectedSessionId((id) => id && nextSessions.some((item) => item.id === id) ? id : null);
+    const sessionIds = new Set(nextSessions.map((item) => item.id));
+    setSelectedSessionIds((ids) => new Set([...ids].filter((id) => sessionIds.has(id))));
+    if (sessionSelectionAnchor.current && !sessionIds.has(sessionSelectionAnchor.current)) sessionSelectionAnchor.current = null;
     setFolders(nextFolders);
   }
   async function restoreSessionById(id: string) {
@@ -136,7 +145,8 @@ export default function App() {
       setState(result.state);
       setArchived(null);
       setDemo(null);
-      setSelectedSessionId(null);
+      setSelectedSessionIds(new Set());
+      sessionSelectionAnchor.current = null;
       setSelectedId(null);
       setPage('workspace');
       setQuery('');
@@ -177,7 +187,10 @@ export default function App() {
     await action(async () => { await api.setSessionFolder(sessionId, folderId); await refreshSessions(); });
   }
   function beginDrag(type: 'folder' | 'session', id: string, event: React.DragEvent) {
-    setDragging({ type, id });
+    const ids = type === 'session' && selectedSessionIds.has(id)
+      ? visibleSessionIds.filter((sessionId) => selectedSessionIds.has(sessionId))
+      : [id];
+    setDragging(type === 'session' ? { type, id, ids } : { type, id });
     setSessionDropTarget(null);
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', id);
@@ -188,20 +201,20 @@ export default function App() {
     endDrag();
     if (!api || !drag) return;
     if (drag.type === 'folder' && drag.id !== folderId) await action(async () => { await api.setFolderParent(drag.id, folderId); await refreshSessions(); });
-    else if (drag.type === 'session') await action(async () => { await api.setSessionFolder(drag.id, folderId); await refreshSessions(); });
+    else if (drag.type === 'session') await action(async () => { for (const id of drag.ids) await api.setSessionFolder(id, folderId); await refreshSessions(); });
   }
   async function dropOnRoot() {
     const drag = dragging;
     endDrag();
     if (!api || !drag) return;
     if (drag.type === 'folder') await action(async () => { await api.setFolderParent(drag.id, null); await refreshSessions(); });
-    else if (drag.type === 'session') await action(async () => { await api.setSessionFolder(drag.id, null); await refreshSessions(); });
+    else if (drag.type === 'session') await action(async () => { for (const id of drag.ids) await api.setSessionFolder(id, null); await refreshSessions(); });
   }
   function dragOverSession(sessionId: string, event: React.DragEvent) {
     if (!dragging || dragging.type !== 'session') return;
     event.preventDefault();
     event.stopPropagation();
-    if (dragging.id === sessionId) { setSessionDropTarget(null); return; }
+    if (dragging.ids.includes(sessionId)) { setSessionDropTarget(null); return; }
     event.dataTransfer.dropEffect = 'move';
     const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
     setDropTarget(null);
@@ -214,8 +227,10 @@ export default function App() {
     const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
     const before = event.clientY < bounds.top + bounds.height / 2;
     endDrag();
-    if (!api || !drag || drag.type !== 'session' || drag.id === targetSessionId) return;
-    await action(async () => { await api.reorderSession(drag.id, targetSessionId, before); await refreshSessions(); });
+    if (!api || !drag || drag.type !== 'session' || drag.ids.includes(targetSessionId)) return;
+    const order = new Map(visibleSessionIds.map((id, index) => [id, index]));
+    const ids = [...drag.ids].sort((a, b) => (order.get(a) ?? Number.MAX_SAFE_INTEGER) - (order.get(b) ?? Number.MAX_SAFE_INTEGER)).reverse();
+    await action(async () => { for (const id of ids) await api.reorderSession(id, targetSessionId, before); await refreshSessions(); });
   }
   function startRenameSession(item: SessionSummary) { setEditingSessionId(item.id); setSessionName(item.name); }
   function cancelRenameSession() { setEditingSessionId(null); setSessionName(''); }
@@ -226,10 +241,18 @@ export default function App() {
     if (!name) return;
     await action(async () => { await api.renameSession(id, name); setEditingSessionId(null); setSessionName(''); await refreshSessions(); }, 'Session renamed.');
   }
-  async function deleteSession() {
-    if (!api || !deletingSession) return;
-    const id = deletingSession.id;
-    await action(async () => { await api.deleteSession(id); setDeletingSession(null); await refreshSessions(); }, 'Session deleted.');
+  function requestDeleteSession(id: string) {
+    setDeletingSessionIds(selectedSessionIds.size > 1 && selectedSessionIds.has(id) ? [...selectedSessionIds] : [id]);
+  }
+  async function deleteSessions() {
+    if (!api || !deletingSessionIds?.length) return;
+    const ids = deletingSessionIds;
+    await action(async () => { for (const id of ids) await api.deleteSession(id); setDeletingSessionIds(null); await refreshSessions(); }, `${ids.length} ${ids.length === 1 ? 'session' : 'sessions'} deleted.`);
+  }
+  async function moveSelectedSessions(folderId: string | null) {
+    if (!api || selectedSessionIds.size < 2) return;
+    const ids = [...selectedSessionIds];
+    await action(async () => { for (const id of ids) await api.setSessionFolder(id, folderId); await refreshSessions(); }, `${ids.length} sessions moved.`);
   }
   const folderChildren = useMemo(() => {
     const map = new Map<string | null, Folder[]>();
@@ -250,6 +273,43 @@ export default function App() {
     walk(null, 0);
     return options;
   }, [folderChildren]);
+  const visibleSessionIds = useMemo(() => {
+    const ids: string[] = [];
+    const addFolder = (folder: Folder) => {
+      if (collapsedFolders.has(folder.id)) return;
+      for (const child of folderChildren.get(folder.id) || []) addFolder(child);
+      for (const item of sessions) if (item.folderId === folder.id) ids.push(item.id);
+    };
+    for (const folder of rootFolders) addFolder(folder);
+    if (!collapsedFolders.has('unfiled')) for (const item of sessions) if (!item.folderId) ids.push(item.id);
+    return ids;
+  }, [collapsedFolders, folderChildren, rootFolders, sessions]);
+  function selectSession(id: string, event: React.MouseEvent<HTMLButtonElement>) {
+    const toggle = event.ctrlKey || event.metaKey;
+    const anchor = sessionSelectionAnchor.current;
+    const anchorIndex = anchor ? visibleSessionIds.indexOf(anchor) : -1;
+    const clickedIndex = visibleSessionIds.indexOf(id);
+    if (event.shiftKey && anchorIndex !== -1 && clickedIndex !== -1) {
+      const start = Math.min(anchorIndex, clickedIndex);
+      const end = Math.max(anchorIndex, clickedIndex);
+      const range = visibleSessionIds.slice(start, end + 1);
+      setSelectedSessionIds((previous) => {
+        if (!toggle) return new Set(range);
+        const next = new Set(previous);
+        range.forEach((sessionId) => next.add(sessionId));
+        return next;
+      });
+    } else if (toggle) {
+      setSelectedSessionIds((previous) => {
+        const next = new Set(previous);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+    } else {
+      setSelectedSessionIds(new Set([id]));
+    }
+    sessionSelectionAnchor.current = id;
+  }
   const renderFolder = (folder: Folder, depth: number): React.ReactNode => {
     const items = sessions.filter((item) => item.folderId === folder.id);
     const children = folderChildren.get(folder.id) || [];
@@ -264,7 +324,7 @@ export default function App() {
       {collapsed && <div className="folder-separator" style={{ marginLeft: contentIndent }}/>} 
     </div>;
   };
-  const renderSession = (item: SessionSummary, indent: number): React.ReactNode => <SessionRow key={item.id} item={item} options={folderOptions} indent={indent} onMove={moveSession} disabled={state.status !== 'idle' && state.status !== 'error'} selected={selectedSessionId === item.id} onSelect={() => setSelectedSessionId(item.id)} dragging={dragging?.type === 'session' && dragging.id === item.id} dropPosition={sessionDropTarget?.id === item.id ? sessionDropTarget.position : null} onDragStart={(event) => beginDrag('session', item.id, event)} onDragEnd={endDrag} onDragOver={(event) => dragOverSession(item.id, event)} onDrop={(event) => dropOnSession(item.id, event)} onView={() => action(async () => { setArchived(await api!.loadSession(item.id)); setDemo(null); setSelectedSessionId(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); })} onRestore={() => restoreSession(item)} editing={editingSessionId === item.id} sessionName={sessionName} onSessionNameChange={setSessionName} onRenameStart={() => startRenameSession(item)} onRenameSave={renameSession} onRenameCancel={cancelRenameSession} onDelete={() => setDeletingSession(item)}/>;
+  const renderSession = (item: SessionSummary, indent: number): React.ReactNode => <SessionRow key={item.id} item={item} options={folderOptions} indent={indent} onMove={moveSession} disabled={(state.status !== 'idle' && state.status !== 'error') || selectedSessionIds.size > 1} renameDisabled={selectedSessionIds.size > 1} selected={selectedSessionIds.has(item.id)} onSelect={(event) => selectSession(item.id, event)} dragging={dragging?.type === 'session' && dragging.ids.includes(item.id)} dropPosition={sessionDropTarget?.id === item.id ? sessionDropTarget.position : null} onDragStart={(event) => beginDrag('session', item.id, event)} onDragEnd={endDrag} onDragOver={(event) => dragOverSession(item.id, event)} onDrop={(event) => dropOnSession(item.id, event)} onView={() => action(async () => { setArchived(await api!.loadSession(item.id)); setDemo(null); setSelectedSessionIds(new Set()); sessionSelectionAnchor.current = null; setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); })} onRestore={() => restoreSession(item)} editing={editingSessionId === item.id && selectedSessionIds.size < 2} sessionName={sessionName} onSessionNameChange={setSessionName} onRenameStart={() => { if (selectedSessionIds.size < 2) startRenameSession(item); }} onRenameSave={renameSession} onRenameCancel={cancelRenameSession} onDelete={() => requestDeleteSession(item.id)}/>;
 
   return <div className="app-shell">
     <header className="window-titlebar">
@@ -293,7 +353,7 @@ export default function App() {
          <section className="page-heading"><div><h1>{page === 'sessions' ? 'Pick up the thread.' : 'Your browsing, connected.'}</h1></div><CurrentContext tab={currentTab} live={isLive}/><button className="button primary" onClick={() => setShowLaunch(true)} disabled={state.status === 'launching' || state.status === 'stopping'}><Plus size={17}/>New session</button></section>
 
         {page === 'sessions' ? <section className="sessions-panel">
-          <div className="section-heading"><h2>Saved sessions</h2><div className="section-heading-actions"><span className="section-count">{sessions.length} {sessions.length === 1 ? 'session' : 'sessions'}</span>{api && (creatingFolder ? <div className="folder-edit folder-edit-inline"><input autoFocus aria-label="Folder name" value={folderName} placeholder="Folder name" onChange={(event) => setFolderName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') createFolder(); if (event.key === 'Escape') cancelCreateFolder(); }}/><button onClick={createFolder} aria-label="Create folder"><Check size={14}/></button><button onClick={cancelCreateFolder} aria-label="Cancel"><X size={14}/></button></div> : <button className="button secondary folder-new" onClick={startCreateFolder}><FolderPlus size={15}/>New folder</button>)}</div></div>
+           <div className="section-heading"><h2>Saved sessions</h2><div className="section-heading-actions">{selectedSessionIds.size > 1 && <div className="session-selection-toolbar"><span>{selectedSessionIds.size} selected</span><label><span>Move to</span><select aria-label="Move selected sessions to folder" value="" onChange={(event) => moveSelectedSessions(event.target.value === '__unfiled' ? null : event.target.value || null)}><option value="">Choose folder</option><option value="__unfiled">Unfiled</option>{folderOptions.map(({ folder, depth: optionDepth }) => <option key={folder.id} value={folder.id}>{'\u00A0'.repeat(optionDepth * 2)}{folder.name}</option>)}</select></label><button className="button secondary" onClick={() => setDeletingSessionIds([...selectedSessionIds])}><Trash2 size={14}/>Delete selected</button></div>}<span className="section-count">{sessions.length} {sessions.length === 1 ? 'session' : 'sessions'}</span>{api && (creatingFolder ? <div className="folder-edit folder-edit-inline"><input autoFocus aria-label="Folder name" value={folderName} placeholder="Folder name" onChange={(event) => setFolderName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') createFolder(); if (event.key === 'Escape') cancelCreateFolder(); }}/><button onClick={createFolder} aria-label="Create folder"><Check size={14}/></button><button onClick={cancelCreateFolder} aria-label="Cancel"><X size={14}/></button></div> : <button className="button secondary folder-new" onClick={startCreateFolder}><FolderPlus size={15}/>New folder</button>)}</div></div>
           {folders.length || sessions.length ? <div className={`sessions-groups ${dropTarget === 'root' ? 'drop-root' : ''}`} onDragOver={(event) => { if (dragging) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget('root'); } }} onDrop={(event) => { event.preventDefault(); dropOnRoot(); }}>
             {rootFolders.map((folder) => renderFolder(folder, 0))}
             {unfiledItems.length > 0 && <div className={`folder-section unfiled ${dropTarget === 'unfiled' ? 'drop-target' : ''}`} onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; setDropTarget('unfiled'); }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); dropOnRoot(); }}><div className="folder-header"><button className="folder-toggle" onClick={() => toggleFolder('unfiled')} aria-expanded={!collapsedFolders.has('unfiled')}>{collapsedFolders.has('unfiled') ? <ChevronRight size={14}/> : <ChevronDown size={14}/>}<FolderOpen size={15}/><strong>Unfiled</strong><span className="folder-count">{unfiledItems.length}</span></button></div>{!collapsedFolders.has('unfiled') && unfiledItems.map((item) => renderSession(item, 18))}<div className="folder-separator" style={{ marginLeft: 18 }}/></div>}
@@ -324,7 +384,7 @@ export default function App() {
     {showLaunch && <LaunchDialog onClose={() => setShowLaunch(false)} running={state.status === 'live' || state.status === 'launching' || state.status === 'stopping'} onDemo={exploreDemo} onLaunch={async (options) => { if (!api) return; await api.launch(options); setDemo(null); setArchived(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); setShowLaunch(false); }}/>} 
     {showHelp && <Modal title="A map for your wandering mind." subtitle="A few small things to help you find your way." onClose={() => setShowHelp(false)}><div className="help-list"><div><Radio/><section><h3>Launch. Browse. See the story.</h3><p>Start a Helium or Chrome session. Tabline launches a separate browser profile with a local debug connection and tracks tabs as you browse.</p></section></div><div><GitBranch/><section><h3>One tab leads to another.</h3><p>Each row is a tab’s lifetime. Arrows show the parent tab reported by the browser. Tabs opened from the address bar or without an opener start a new thread.</p></section></div><div><Image/><section><h3>A little picture of where you’ve been.</h3><p>Thumbnails update after navigation and about every 20 seconds. Select a tab for its preview, navigation history, and browser controls. Some browser-internal pages may not allow screenshots.</p></section></div><div><ShieldCheck/><section><h3>Just on your device.</h3><p>Sessions, URLs, and thumbnails are saved locally in Tabline’s app data. Export a session as JSON to keep a portable copy. Ending a session closes its dedicated browser window.</p></section></div></div><button className="button primary full-width" onClick={() => setShowHelp(false)}>Got it, let’s explore <ArrowRight size={16}/></button></Modal>}
     {showStop && <Modal title="Call it a session?" subtitle="Your trail will be right here when you need it." onClose={() => setShowStop(false)}><p className="modal-description">This closes the browser launched by Tabline and saves your timeline, thumbnails, and connections on this device.</p><div className="modal-actions"><button className="button secondary" onClick={() => setShowStop(false)}>Keep exploring</button><button className="button primary" onClick={() => action(async () => { await api!.stop(); setShowStop(false); }, 'Session saved. A good place to pick up later.')}><Check size={16}/>End & save session</button></div></Modal>}
-    {deletingSession && <Modal title="Delete this session?" subtitle="This can’t be undone." onClose={() => setDeletingSession(null)}><p className="modal-description">“{deletingSession.name}” and its saved tabs, thumbnails, and connections will be removed from this device.</p><div className="modal-actions"><button className="button secondary" onClick={() => setDeletingSession(null)}>Keep it</button><button className="button primary" onClick={deleteSession}><Trash2 size={16}/>Delete session</button></div></Modal>}
+    {deletingSessionIds && <Modal title={deletingSessionIds.length === 1 ? 'Delete this session?' : `Delete ${deletingSessionIds.length} sessions?`} subtitle="This can’t be undone." onClose={() => setDeletingSessionIds(null)}><p className="modal-description">{deletingSessionIds.length === 1 ? `“${sessions.find((item) => item.id === deletingSessionIds[0])?.name || 'This session'}” and its saved tabs, thumbnails, and connections will be removed from this device.` : `${deletingSessionIds.length} saved sessions and their tabs, thumbnails, and connections will be removed from this device.`}</p><div className="modal-actions"><button className="button secondary" onClick={() => setDeletingSessionIds(null)}>Keep it</button><button className="button primary" onClick={deleteSessions}><Trash2 size={16}/>{deletingSessionIds.length === 1 ? 'Delete session' : 'Delete sessions'}</button></div></Modal>}
     {toast && <div className="toast" role="status"><span>{toast}</span><button aria-label="Dismiss notification" onClick={() => setToast(null)}><X size={16}/></button></div>}
   </div>;
 }
@@ -382,8 +442,8 @@ function TabList({ tabs, now, selectedId, currentTabId, onSelect, onFocus }: { t
   return <div className="tab-list"><div className="tab-list-heading"><span>PAGE</span><span>OPENED</span><span>DURATION</span><span>STATUS</span></div>{groups.map((desktopGroup) => { const desktopCollapsed = collapsed.has(desktopGroup.key); const current = desktopGroup.tabs.some((tab) => tab.id === currentTabId); return <Fragment key={desktopGroup.key}><button type="button" className={`tab-list-separator desktop-separator ${current ? 'current' : ''} ${desktopCollapsed ? 'collapsed' : ''}`} title={desktopGroup.desktop === 'unknown' ? undefined : desktopGroup.desktop} onClick={() => toggle(desktopGroup.key)} aria-expanded={!desktopCollapsed}><span className="group-mark"><Monitor size={12}/></span><strong>{desktopLabel(desktopGroup.desktop)}</strong><span className="group-count">{desktopGroup.tabs.length} {desktopGroup.tabs.length === 1 ? 'tab' : 'tabs'}</span>{current && <span className="current-group-label">CURRENT</span>}<span className="separator-chevron">{desktopCollapsed ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</span></button>{!desktopCollapsed && desktopGroup.windows.map((windowGroup) => { const windowCollapsed = collapsed.has(windowGroup.key); return <Fragment key={windowGroup.key}><button type="button" className={`tab-list-separator window-separator ${windowGroup.tabs.some((tab) => tab.id === currentTabId) ? 'current' : ''} ${windowCollapsed ? 'collapsed' : ''}`} onClick={() => toggle(windowGroup.key)} aria-expanded={!windowCollapsed}><span className="group-mark"><Monitor size={11}/></span><span>Window {locationLabel(windowGroup.window, 'unknown')}</span><span className="group-count">{windowGroup.tabs.length} {windowGroup.tabs.length === 1 ? 'tab' : 'tabs'}</span><span className="separator-chevron">{windowCollapsed ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</span></button>{!windowCollapsed && windowGroup.tabs.map((tab) => <button key={tab.id} className={`tab-list-row ${tab.id === selectedId ? 'selected' : ''} ${tab.id === currentTabId ? 'current' : ''}`} onClick={() => onSelect(tab.id)} onDoubleClick={() => { if (!tab.closedAt) onFocus(tab.id); }}><div className="tab-list-title"><SiteIcon tab={tab}/><div><strong>{tab.title}</strong><span>{domain(tab.originalUrl || tab.url)}</span></div></div><span>{clock(tab.openedAt)}</span><span>{duration((tab.closedAt || now) - tab.openedAt)}</span><span className={`status-label ${tab.closedAt ? 'closed' : tab.frozen ? 'frozen' : 'open'}`}><span className="tiny-dot"/>{tab.closedAt ? 'Closed' : tab.frozen ? 'Frozen' : 'Open'}</span></button>)}</Fragment>; })}</Fragment>; })}</div>;
 }
 
-function SessionRow({ item, options, onMove, onView, onRestore, disabled, indent, selected, onSelect, dragging, dropPosition, onDragStart, onDragEnd, onDragOver, onDrop, editing, sessionName, onSessionNameChange, onRenameStart, onRenameSave, onRenameCancel, onDelete }: { item: SessionSummary; options: { folder: Folder; depth: number }[]; onMove: (sessionId: string, folderId: string | null) => void; onView: () => void; onRestore: () => void; disabled: boolean; indent: number; selected: boolean; onSelect: () => void; dragging: boolean; dropPosition: 'before' | 'after' | null; onDragStart: (event: React.DragEvent) => void; onDragEnd: () => void; onDragOver: (event: React.DragEvent) => void; onDrop: (event: React.DragEvent) => void; editing: boolean; sessionName: string; onSessionNameChange: (value: string) => void; onRenameStart: () => void; onRenameSave: () => void; onRenameCancel: () => void; onDelete: () => void }) {
-  return <div className={`saved-session ${selected ? 'selected' : ''} ${dragging ? 'dragging' : ''} ${dropPosition ? `drop-${dropPosition}` : ''} ${editing ? 'editing' : ''}`} style={{ paddingLeft: indent }} onDragOver={onDragOver} onDrop={onDrop}>{editing ? <div className="session-rename"><input autoFocus aria-label="Rename session" value={sessionName} onChange={(event) => onSessionNameChange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') onRenameSave(); if (event.key === 'Escape') onRenameCancel(); }}/><button onClick={onRenameSave} aria-label="Save session name"><Check size={14}/></button><button onClick={onRenameCancel} aria-label="Cancel"><X size={14}/></button></div> : <><button className="saved-session-view" draggable onClick={onSelect} onDoubleClick={onView} onDragStart={onDragStart} onDragEnd={onDragEnd} title="Click to select, double-click to open"><span className="saved-session-icon"><FolderClock size={22}/></span><div><strong>{item.name}</strong><span>{date(item.startedAt)} · {clock(item.startedAt)} · {item.browser === 'helium' ? 'Helium' : 'Chrome'}</span></div><span>{item.tabCount} tabs</span><ArrowRight size={18}/></button><label className="saved-session-folder" title="Move to folder"><FolderOpen size={13}/><span className="select-wrap"><select aria-label={`Move ${item.name} to folder`} value={item.folderId || ''} onChange={(event) => onMove(item.id, event.target.value || null)}><option value="">Unfiled</option>{options.map(({ folder, depth: optionDepth }) => <option key={folder.id} value={folder.id}>{'\u00A0'.repeat(optionDepth * 2)}{folder.name}</option>)}</select><ChevronDown size={13}/></span></label><div className="saved-session-actions"><button onClick={onRenameStart} aria-label={`Rename ${item.name}`} title="Rename session"><Pencil size={13}/></button><button onClick={onDelete} aria-label={`Delete ${item.name}`} title="Delete session"><Trash2 size={13}/></button></div><button className="button secondary restore-session" disabled={disabled} onClick={onRestore}><RefreshCw size={14}/>Restore</button></>}</div>;
+function SessionRow({ item, options, onMove, onView, onRestore, disabled, renameDisabled, indent, selected, onSelect, dragging, dropPosition, onDragStart, onDragEnd, onDragOver, onDrop, editing, sessionName, onSessionNameChange, onRenameStart, onRenameSave, onRenameCancel, onDelete }: { item: SessionSummary; options: { folder: Folder; depth: number }[]; onMove: (sessionId: string, folderId: string | null) => void; onView: () => void; onRestore: () => void; disabled: boolean; renameDisabled: boolean; indent: number; selected: boolean; onSelect: (event: React.MouseEvent<HTMLButtonElement>) => void; dragging: boolean; dropPosition: 'before' | 'after' | null; onDragStart: (event: React.DragEvent) => void; onDragEnd: () => void; onDragOver: (event: React.DragEvent) => void; onDrop: (event: React.DragEvent) => void; editing: boolean; sessionName: string; onSessionNameChange: (value: string) => void; onRenameStart: () => void; onRenameSave: () => void; onRenameCancel: () => void; onDelete: () => void }) {
+  return <div className={`saved-session ${selected ? 'selected' : ''} ${dragging ? 'dragging' : ''} ${dropPosition ? `drop-${dropPosition}` : ''} ${editing ? 'editing' : ''}`} style={{ paddingLeft: indent }} onDragOver={onDragOver} onDrop={onDrop}>{editing ? <div className="session-rename"><input autoFocus aria-label="Rename session" value={sessionName} onChange={(event) => onSessionNameChange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') onRenameSave(); if (event.key === 'Escape') onRenameCancel(); }}/><button onClick={onRenameSave} aria-label="Save session name"><Check size={14}/></button><button onClick={onRenameCancel} aria-label="Cancel"><X size={14}/></button></div> : <><button className="saved-session-view" draggable onClick={onSelect} onDoubleClick={onView} onDragStart={onDragStart} onDragEnd={onDragEnd} title="Click to select, double-click to open"><span className="saved-session-icon"><FolderClock size={22}/></span><div><strong>{item.name}</strong><span>{date(item.startedAt)} · {clock(item.startedAt)} · {item.browser === 'helium' ? 'Helium' : 'Chrome'}</span></div><span>{item.tabCount} tabs</span><ArrowRight size={18}/></button><label className="saved-session-folder" title="Move to folder"><FolderOpen size={13}/><span className="select-wrap"><select aria-label={`Move ${item.name} to folder`} value={item.folderId || ''} onChange={(event) => onMove(item.id, event.target.value || null)}><option value="">Unfiled</option>{options.map(({ folder, depth: optionDepth }) => <option key={folder.id} value={folder.id}>{'\u00A0'.repeat(optionDepth * 2)}{folder.name}</option>)}</select><ChevronDown size={13}/></span></label><div className="saved-session-actions"><button disabled={renameDisabled} onClick={onRenameStart} aria-label={`Rename ${item.name}`} title="Rename session"><Pencil size={13}/></button><button onClick={onDelete} aria-label={`Delete ${item.name}`} title="Delete session"><Trash2 size={13}/></button></div><button className="button secondary restore-session" disabled={disabled} onClick={onRestore}><RefreshCw size={14}/>Restore</button></>}</div>;
 }
 
 function Timeline({ tabs, allTabs, session, now, time, onTimeChange, selectedId, onSelect, onFocus, thumbnails, connections, zoom }: { tabs: BrowserTab[]; allTabs: BrowserTab[]; session: Session; now: number; time: number; onTimeChange: (time: number) => void; selectedId: string | null; onSelect: (id: string) => void; onFocus: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number }) {
