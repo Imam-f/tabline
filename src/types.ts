@@ -39,13 +39,24 @@ export interface Session {
   startedAt: number;
   endedAt: number | null;
   restoredFromSessionId?: string;
+  browserDataDir?: string;
+  profileSourceSessionId?: string | null;
+  profileCopySkipped?: string[];
   tabs: BrowserTab[];
+}
+export interface RuntimeSessionState {
+  status: 'idle' | 'launching' | 'live' | 'stopping' | 'error';
+  session: Session;
+  debugPort: number | null;
+  error: string | null;
 }
 export interface AppState {
   status: 'idle' | 'launching' | 'live' | 'stopping' | 'error';
   session: Session | null;
   debugPort: number | null;
   error: string | null;
+  activeSessionId: string | null;
+  sessions: RuntimeSessionState[];
 }
 export interface BrowserChoice { id: 'helium' | 'chrome'; name: string; path: string | null }
 export interface LaunchOptions { browser: 'helium' | 'chrome'; executable?: string; url: string; name: string }
@@ -57,7 +68,9 @@ export interface TablineAPI {
   getBrowsers(): Promise<BrowserChoice[]>;
   chooseExecutable(): Promise<string | null>;
   launch(options: LaunchOptions): Promise<AppState>;
-  stop(): Promise<void>;
+  stop(id?: string): Promise<void>;
+  selectSession(id: string): Promise<AppState>;
+  closeSession(id: string): Promise<AppState>;
   focusTab(id: string): Promise<void>;
   closeTab(id: string): Promise<void>;
   capture(id: string): Promise<string | undefined>;

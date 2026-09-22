@@ -39,7 +39,7 @@ function SiteIcon({ tab, size = '' }: { tab: BrowserTab; size?: string }) {
 }
 
 export default function App() {
-  const [state, setState] = useState<AppState>({ status: 'idle', session: null, debugPort: null, error: null });
+  const [state, setState] = useState<AppState>({ status: 'idle', session: null, debugPort: null, error: null, activeSessionId: null, sessions: [] });
   const [demo, setDemo] = useState<Session | null>(() => api ? null : makeDemo());
   const [archived, setArchived] = useState<Session | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(api ? null : 'react');
@@ -74,7 +74,7 @@ export default function App() {
   const searchRef = useRef<HTMLInputElement>(null);
   const session = demo || archived || state.session;
   const isLive = !demo && !archived && state.status === 'live';
-  const canRestore = !!api && !demo && !!session && !isLive && (state.status === 'idle' || state.status === 'error');
+  const canRestore = !!api && !demo && !!session && !isLive;
   const sessionNow = session?.endedAt || now;
   const restoreTime = timelineTime ?? sessionNow;
   const selected = session?.tabs.find((tab) => tab.id === selectedId) || null;
@@ -157,6 +157,27 @@ export default function App() {
     });
   }
   async function restoreSession(item: SessionSummary) { await restoreSessionById(item.id); }
+  async function openRuntimeSession(id: string) {
+    if (!api) return;
+    await action(async () => {
+      setState(await api.selectSession(id));
+      setDemo(null);
+      setArchived(null);
+      setSelectedId(null);
+      setPage('workspace');
+      setQuery('');
+      setFilter('all');
+    });
+  }
+  async function closeRuntimeSession(id: string) {
+    if (!api) return;
+    await action(async () => {
+      setState(await api.closeSession(id));
+      setSelectedId(null);
+      setQuery('');
+      setFilter('all');
+    });
+  }
   function exploreDemo() { setDemo(makeDemo()); setArchived(null); setSelectedId('react'); setPage('workspace'); setShowLaunch(false); setQuery(''); setFilter('all'); }
   function toggleFolder(id: string) { setCollapsedFolders((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
   function startCreateFolder() { setCreatingFolder(true); setCreatingSubfolder(null); setFolderName(''); setEditingFolderId(null); }
@@ -324,7 +345,7 @@ export default function App() {
       {collapsed && <div className="folder-separator" style={{ marginLeft: contentIndent }}/>} 
     </div>;
   };
-  const renderSession = (item: SessionSummary, indent: number): React.ReactNode => <SessionRow key={item.id} item={item} options={folderOptions} indent={indent} onMove={moveSession} disabled={(state.status !== 'idle' && state.status !== 'error') || selectedSessionIds.size > 1} renameDisabled={selectedSessionIds.size > 1} selected={selectedSessionIds.has(item.id)} onSelect={(event) => selectSession(item.id, event)} dragging={dragging?.type === 'session' && dragging.ids.includes(item.id)} dropPosition={sessionDropTarget?.id === item.id ? sessionDropTarget.position : null} onDragStart={(event) => beginDrag('session', item.id, event)} onDragEnd={endDrag} onDragOver={(event) => dragOverSession(item.id, event)} onDrop={(event) => dropOnSession(item.id, event)} onView={() => action(async () => { setArchived(await api!.loadSession(item.id)); setDemo(null); setSelectedSessionIds(new Set()); sessionSelectionAnchor.current = null; setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); })} onRestore={() => restoreSession(item)} editing={editingSessionId === item.id && selectedSessionIds.size < 2} sessionName={sessionName} onSessionNameChange={setSessionName} onRenameStart={() => { if (selectedSessionIds.size < 2) startRenameSession(item); }} onRenameSave={renameSession} onRenameCancel={cancelRenameSession} onDelete={() => requestDeleteSession(item.id)}/>;
+  const renderSession = (item: SessionSummary, indent: number): React.ReactNode => <SessionRow key={item.id} item={item} options={folderOptions} indent={indent} onMove={moveSession} disabled={selectedSessionIds.size > 1} renameDisabled={selectedSessionIds.size > 1} selected={selectedSessionIds.has(item.id)} onSelect={(event) => selectSession(item.id, event)} dragging={dragging?.type === 'session' && dragging.ids.includes(item.id)} dropPosition={sessionDropTarget?.id === item.id ? sessionDropTarget.position : null} onDragStart={(event) => beginDrag('session', item.id, event)} onDragEnd={endDrag} onDragOver={(event) => dragOverSession(item.id, event)} onDrop={(event) => dropOnSession(item.id, event)} onView={() => action(async () => { setArchived(await api!.loadSession(item.id)); setDemo(null); setSelectedSessionIds(new Set()); sessionSelectionAnchor.current = null; setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); })} onRestore={() => restoreSession(item)} editing={editingSessionId === item.id && selectedSessionIds.size < 2} sessionName={sessionName} onSessionNameChange={setSessionName} onRenameStart={() => { if (selectedSessionIds.size < 2) startRenameSession(item); }} onRenameSave={renameSession} onRenameCancel={cancelRenameSession} onDelete={() => requestDeleteSession(item.id)}/>;
 
   return <div className="app-shell">
     <header className="window-titlebar">
@@ -341,8 +362,8 @@ export default function App() {
         <button className={`nav-item ${page === 'workspace' ? 'active' : ''}`} onClick={() => setPage('workspace')}><Activity size={18}/><span>Browser timeline</span></button>
         <button className={`nav-item ${page === 'sessions' ? 'active' : ''}`} onClick={openSessions}><FolderClock size={18}/><span>Saved sessions</span></button>
       </nav>
-      <div className="sidebar-session-heading"><span>CURRENT SESSION</span></div>
-      {session && <button className="current-session" onClick={() => setPage('workspace')}><span className={`tiny-dot ${isLive || demo ? 'green' : 'gray'}`}/><div><strong>{session.name}</strong><span>{demo ? 'Demo session' : isLive ? 'Recording your journey' : 'Saved locally'} · {session.tabs.length} tabs</span></div></button>}
+      <div className="sidebar-session-heading"><span>{state.sessions.length ? 'OPEN SESSIONS' : 'CURRENT SESSION'}</span></div>
+      <div className="sidebar-sessions">{state.sessions.map((runtime) => <button key={runtime.session.id} className={`current-session ${state.activeSessionId === runtime.session.id && !archived && !demo ? 'active' : ''}`} onClick={() => openRuntimeSession(runtime.session.id)}><span className={`tiny-dot ${runtime.status === 'live' ? 'green' : 'gray'}`}/><div><strong>{runtime.session.name}</strong><span>{runtime.status === 'live' ? 'Recording' : 'Saved'} · {runtime.session.tabs.length} tabs</span></div></button>)}{!state.sessions.length && session && <button className="current-session active" onClick={() => setPage('workspace')}><span className={`tiny-dot ${demo ? 'green' : 'gray'}`}/><div><strong>{session.name}</strong><span>{demo ? 'Demo session' : 'Saved locally'} · {session.tabs.length} tabs</span></div></button>}</div>
       <div className="sidebar-bottom">
         <button className="nav-item help-button" onClick={() => setShowHelp(true)}><CircleHelp size={18}/><span>A little help</span><span className="help-key">?</span></button>
       </div>
@@ -350,6 +371,7 @@ export default function App() {
 
     <div className="main-shell">
       <main>
+         {!!state.sessions.length && <div className="session-tabs" role="tablist" aria-label="Open sessions">{state.sessions.map((runtime) => { const active = state.activeSessionId === runtime.session.id && !archived && !demo; return <div className={`session-tab ${active ? 'active' : ''}`} key={runtime.session.id}><button role="tab" aria-selected={active} onClick={() => openRuntimeSession(runtime.session.id)}><span className={`tiny-dot ${runtime.status === 'live' ? 'green' : 'gray'}`}/><span>{runtime.session.name}</span><small>{runtime.session.tabs.length}</small></button>{active && runtime.status === 'idle' && <button className="session-tab-close" aria-label={`Close ${runtime.session.name}`} title="Close session tab" onClick={() => closeRuntimeSession(runtime.session.id)}><X size={13}/></button>}</div>; })}<button className="session-tab-new" aria-label="New session" onClick={() => setShowLaunch(true)}><Plus size={14}/></button></div>}
          <section className="page-heading"><div><h1>{page === 'sessions' ? 'Pick up the thread.' : 'Your browsing, connected.'}</h1></div><CurrentContext tab={currentTab} live={isLive}/><button className="button primary" onClick={() => setShowLaunch(true)} disabled={state.status === 'launching' || state.status === 'stopping'}><Plus size={17}/>New session</button></section>
 
         {page === 'sessions' ? <section className="sessions-panel">
@@ -381,7 +403,12 @@ export default function App() {
         </>}
       </main>
     </div>
-    {showLaunch && <LaunchDialog onClose={() => setShowLaunch(false)} running={state.status === 'live' || state.status === 'launching' || state.status === 'stopping'} onDemo={exploreDemo} onLaunch={async (options) => { if (!api) return; await api.launch(options); setDemo(null); setArchived(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); setShowLaunch(false); }}/>} 
+    {showLaunch && <LaunchDialog
+      onClose={() => setShowLaunch(false)}
+      running={false}
+      onDemo={exploreDemo}
+      onLaunch={async (options) => { if (!api) return; setState(await api.launch(options)); setDemo(null); setArchived(null); setSelectedId(null); setPage('workspace'); setQuery(''); setFilter('all'); setShowLaunch(false); }}
+    />}
     {showHelp && <Modal title="A map for your wandering mind." subtitle="A few small things to help you find your way." onClose={() => setShowHelp(false)}><div className="help-list"><div><Radio/><section><h3>Launch. Browse. See the story.</h3><p>Start a Helium or Chrome session. Tabline launches a separate browser profile with a local debug connection and tracks tabs as you browse.</p></section></div><div><GitBranch/><section><h3>One tab leads to another.</h3><p>Each row is a tab’s lifetime. Arrows show the parent tab reported by the browser. Tabs opened from the address bar or without an opener start a new thread.</p></section></div><div><Image/><section><h3>A little picture of where you’ve been.</h3><p>Thumbnails update after navigation and about every 20 seconds. Select a tab for its preview, navigation history, and browser controls. Some browser-internal pages may not allow screenshots.</p></section></div><div><ShieldCheck/><section><h3>Just on your device.</h3><p>Sessions, URLs, and thumbnails are saved locally in Tabline’s app data. Export a session as JSON to keep a portable copy. Ending a session closes its dedicated browser window.</p></section></div></div><button className="button primary full-width" onClick={() => setShowHelp(false)}>Got it, let’s explore <ArrowRight size={16}/></button></Modal>}
     {showStop && <Modal title="Call it a session?" subtitle="Your trail will be right here when you need it." onClose={() => setShowStop(false)}><p className="modal-description">This closes the browser launched by Tabline and saves your timeline, thumbnails, and connections on this device.</p><div className="modal-actions"><button className="button secondary" onClick={() => setShowStop(false)}>Keep exploring</button><button className="button primary" onClick={() => action(async () => { await api!.stop(); setShowStop(false); }, 'Session saved. A good place to pick up later.')}><Check size={16}/>End & save session</button></div></Modal>}
     {deletingSessionIds && <Modal title={deletingSessionIds.length === 1 ? 'Delete this session?' : `Delete ${deletingSessionIds.length} sessions?`} subtitle="This can’t be undone." onClose={() => setDeletingSessionIds(null)}><p className="modal-description">{deletingSessionIds.length === 1 ? `“${sessions.find((item) => item.id === deletingSessionIds[0])?.name || 'This session'}” and its saved tabs, thumbnails, and connections will be removed from this device.` : `${deletingSessionIds.length} saved sessions and their tabs, thumbnails, and connections will be removed from this device.`}</p><div className="modal-actions"><button className="button secondary" onClick={() => setDeletingSessionIds(null)}>Keep it</button><button className="button primary" onClick={deleteSessions}><Trash2 size={16}/>{deletingSessionIds.length === 1 ? 'Delete session' : 'Delete sessions'}</button></div></Modal>}

@@ -1,11 +1,12 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
-const { BrowserController, detectBrowsers } = require('./browser.cjs');
+const { detectBrowsers } = require('./browser.cjs');
+const { SessionManager } = require('./session-manager.cjs');
 const { VirtualDesktopResolver } = require('./virtual-desktop.cjs');
 
 let window;
-let controller;
+let manager;
 let quitting = false;
 let virtualDesktopResolver;
 const isDev = process.env.TABLINE_DEV === '1';
@@ -17,40 +18,41 @@ else {
     const extensionPath = app.isPackaged
       ? path.join(process.resourcesPath, 'app.asar.unpacked', 'electron', 'tabline-extension')
       : path.join(__dirname, 'tabline-extension');
-    controller = new BrowserController(path.join(app.getPath('userData'), 'browser-data'), extensionPath);
-    if (process.platform === 'win32') {
-      virtualDesktopResolver = new VirtualDesktopResolver();
+    if (process.platform === 'win32') virtualDesktopResolver = new VirtualDesktopResolver();
+    manager = new SessionManager(path.join(app.getPath('userData'), 'browser-data'), extensionPath, (controller) => {
+      if (!virtualDesktopResolver) return;
       controller.desktopResolver = (windowId, bounds, processId) => virtualDesktopResolver.resolve(windowId, processId, bounds);
       controller.desktopMover = (windowId, bounds, processId, desktopId) => virtualDesktopResolver.move(windowId, processId, bounds, desktopId);
-    }
-    controller.on('change', (state) => { if (window && !window.isDestroyed()) window.webContents.send('state:changed', state); });
-    controller.on('storage-error', (message) => { if (window && !window.isDestroyed()) window.webContents.send('state:changed', { ...controller.snapshot(), error: `Could not save session: ${message}` }); });
-    ipcMain.handle('state:get', () => controller.snapshot());
+    });
+    manager.on('change', (state) => { if (window && !window.isDestroyed()) window.webContents.send('state:changed', state); });
+    ipcMain.handle('state:get', () => manager.snapshot());
     ipcMain.handle('browsers:list', () => detectBrowsers());
     ipcMain.handle('browser:choose', async () => {
       const result = await dialog.showOpenDialog(window, { title: 'Choose Helium or Chrome executable', properties: ['openFile'], ...(process.platform === 'win32' ? { filters: [{ name: 'Browser executable', extensions: ['exe'] }] } : {}) });
       return result.canceled ? null : result.filePaths[0];
     });
-    ipcMain.handle('browser:launch', (_event, options) => controller.launch(options));
-    ipcMain.handle('browser:stop', () => controller.stop());
-    ipcMain.handle('tab:focus', (_event, id) => controller.focusTab(id));
-    ipcMain.handle('tab:close', (_event, id) => controller.closeTab(id));
-    ipcMain.handle('tab:capture', (_event, id) => controller.capture(id));
-    ipcMain.handle('tab:freeze', (_event, id) => controller.freezeTabById(id));
-    ipcMain.handle('tab:unfreeze', (_event, id) => controller.unfreezeTabById(id));
-    ipcMain.handle('tabs:freeze-all', () => controller.freezeAllTabs());
-    ipcMain.handle('sessions:list', () => controller.listSessions());
-    ipcMain.handle('sessions:load', (_event, id) => controller.loadSession(id));
-    ipcMain.handle('sessions:restore', (_event, id, options) => controller.restoreSession(id, options));
-    ipcMain.handle('folders:list', () => controller.listFolders());
-    ipcMain.handle('folder:create', (_event, name, parentId) => controller.createFolder(name, parentId));
-    ipcMain.handle('folder:rename', (_event, id, name) => controller.renameFolder(id, name));
-    ipcMain.handle('folder:delete', (_event, id) => controller.deleteFolder(id));
-    ipcMain.handle('folder:move', (_event, id, parentId) => controller.setFolderParent(id, parentId));
-    ipcMain.handle('session:set-folder', (_event, sessionId, folderId) => controller.setSessionFolder(sessionId, folderId));
-    ipcMain.handle('session:reorder', (_event, sessionId, targetSessionId, before) => controller.reorderSession(sessionId, targetSessionId, before));
-    ipcMain.handle('session:rename', (_event, id, name) => controller.renameSession(id, name));
-    ipcMain.handle('session:delete', (_event, id) => controller.deleteSession(id));
+    ipcMain.handle('browser:launch', (_event, options) => manager.launch(options));
+    ipcMain.handle('browser:stop', (_event, id) => manager.stop(id));
+    ipcMain.handle('session:select', (_event, id) => manager.selectSession(id));
+    ipcMain.handle('session:close', (_event, id) => manager.closeSession(id));
+    ipcMain.handle('tab:focus', (_event, id) => manager.focusTab(id));
+    ipcMain.handle('tab:close', (_event, id) => manager.closeTab(id));
+    ipcMain.handle('tab:capture', (_event, id) => manager.capture(id));
+    ipcMain.handle('tab:freeze', (_event, id) => manager.freezeTabById(id));
+    ipcMain.handle('tab:unfreeze', (_event, id) => manager.unfreezeTabById(id));
+    ipcMain.handle('tabs:freeze-all', () => manager.freezeAllTabs());
+    ipcMain.handle('sessions:list', () => manager.listSessions());
+    ipcMain.handle('sessions:load', (_event, id) => manager.loadSession(id));
+    ipcMain.handle('sessions:restore', (_event, id, options) => manager.restoreSession(id, options));
+    ipcMain.handle('folders:list', () => manager.listFolders());
+    ipcMain.handle('folder:create', (_event, name, parentId) => manager.createFolder(name, parentId));
+    ipcMain.handle('folder:rename', (_event, id, name) => manager.renameFolder(id, name));
+    ipcMain.handle('folder:delete', (_event, id) => manager.deleteFolder(id));
+    ipcMain.handle('folder:move', (_event, id, parentId) => manager.setFolderParent(id, parentId));
+    ipcMain.handle('session:set-folder', (_event, sessionId, folderId) => manager.setSessionFolder(sessionId, folderId));
+    ipcMain.handle('session:reorder', (_event, sessionId, targetSessionId, before) => manager.reorderSession(sessionId, targetSessionId, before));
+    ipcMain.handle('session:rename', (_event, id, name) => manager.renameSession(id, name));
+    ipcMain.handle('session:delete', (_event, id) => manager.deleteSession(id));
     ipcMain.handle('window:minimize', (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
     ipcMain.handle('window:toggle-maximize', (event) => {
       const senderWindow = BrowserWindow.fromWebContents(event.sender);
@@ -71,10 +73,10 @@ else {
   });
 
   app.on('before-quit', (event) => {
-    if (!quitting && controller?.status === 'live') {
+    if (!quitting && manager?.hasRunningSessions()) {
       event.preventDefault();
       quitting = true;
-      controller.stop().finally(() => app.quit());
+      manager.stopAll().finally(() => app.quit());
     }
   });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

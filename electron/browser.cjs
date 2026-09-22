@@ -8,12 +8,37 @@ const http = require('node:http');
 const { CDP } = require('./cdp.cjs');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const bridgeOrigin = 'http://127.0.0.1:17637';
 const inactivityScreenshotAfter = 5 * 60 * 1000;
 const inactivityFreezeAfter = 10 * 60 * 1000;
+const transientProfileFiles = new Set(['DevToolsActivePort', 'SingletonCookie', 'SingletonLock', 'SingletonSocket']);
 
-function freezableUrl(url) {
-  try { const parsed = new URL(url); return ['http:', 'https:'].includes(parsed.protocol) && parsed.origin !== bridgeOrigin; } catch { return false; }
+function freezableUrl(url, localBridgeOrigin = null) {
+  try { const parsed = new URL(url); return ['http:', 'https:'].includes(parsed.protocol) && parsed.origin !== localBridgeOrigin; } catch { return false; }
+}
+
+function copyBrowserDataDir(source, destination, onSkip = () => {}) {
+  fs.rmSync(destination, { recursive: true, force: true });
+  fs.mkdirSync(destination, { recursive: true });
+  if (!source || !fs.existsSync(source)) return false;
+  const copy = (from, to) => {
+    for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+      if (transientProfileFiles.has(entry.name)) continue;
+      const sourceEntry = path.join(from, entry.name);
+      const destinationEntry = path.join(to, entry.name);
+      if (entry.isDirectory()) {
+        fs.mkdirSync(destinationEntry, { recursive: true });
+        copy(sourceEntry, destinationEntry);
+      } else {
+        try { fs.copyFileSync(sourceEntry, destinationEntry); }
+        catch (error) {
+          if (!['EACCES', 'EBUSY', 'ENOENT', 'EPERM'].includes(error.code)) throw error;
+          onSkip(path.relative(source, sourceEntry));
+        }
+      }
+    }
+  };
+  copy(source, destination);
+  return true;
 }
 
 function escapeHtml(value) {
@@ -91,7 +116,7 @@ function buildRestorePlan(session, at = null) {
   const windows = new Map();
   let skipped = 0;
   for (const tab of candidates.slice(0, 250)) {
-    const url = restoreUrl(tab.url);
+    const url = restoreUrl(tab.originalUrl || tab.url);
     if (!url) { skipped++; continue; }
     const sourceWindowId = String(tab.extensionWindowId ?? tab.windowId ?? 'default');
     if (!windows.has(sourceWindowId)) windows.set(sourceWindowId, { sourceWindowId, desktopId: tab.desktopId || 'unknown', bounds: tab.windowBounds || null, tabs: [] });
@@ -129,10 +154,12 @@ class BrowserController extends EventEmitter {
     this.persistTimer = null;
     this.extensionPath = extensionPath;
     this.groupBridge = null;
+    this.bridgePort = null;
     this.groupToken = null;
     this.pendingRestore = null;
     this.restoreResolve = null;
     this.closingBrowser = false;
+    this.launchCancelled = false;
     fs.mkdirSync(path.join(dataDir, 'sessions'), { recursive: true });
   }
 
@@ -165,7 +192,8 @@ class BrowserController extends EventEmitter {
     } catch (error) { this.emit('storage-error', error.message); }
   }
 
-  freezerUrl(slug) { return `${bridgeOrigin}/s/${encodeURIComponent(slug)}`; }
+  bridgeOrigin() { return this.bridgePort ? `http://127.0.0.1:${this.bridgePort}` : null; }
+  freezerUrl(slug) { return `${this.bridgeOrigin()}/s/${encodeURIComponent(slug)}`; }
   entryForSlug(slug) { return this.freezer.entries.find((entry) => entry.slug === slug) || null; }
   entryForUrl(url) {
     return this.freezer.entries.find((entry) => entry.active && this.freezerUrl(entry.slug) === url) || null;
@@ -316,6 +344,7 @@ class BrowserController extends EventEmitter {
   deleteSession(id) {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid session ID');
     fs.rmSync(path.join(this.dataDir, 'sessions', `${id}.json`), { force: true });
+    fs.rmSync(path.join(this.dataDir, 'profiles', id), { recursive: true, force: true, maxRetries: 12, retryDelay: 250 });
   }
 
   loadSession(id) {
@@ -338,19 +367,34 @@ class BrowserController extends EventEmitter {
     const url = validStartUrl(options.url);
     this.lastError = null;
     this.closingBrowser = false;
+    this.launchCancelled = false;
     this.status = 'launching';
     this.publish();
-    const profile = path.join(this.dataDir, 'profiles', browser);
-    fs.mkdirSync(profile, { recursive: true });
-    const runtimeExtensionPath = path.join(profile, 'tabline-companion');
-    fs.rmSync(runtimeExtensionPath, { recursive: true, force: true });
-    fs.cpSync(this.extensionPath, runtimeExtensionPath, { recursive: true });
-    const portFile = path.join(profile, 'DevToolsActivePort');
-    try { fs.unlinkSync(portFile); } catch {}
+    const sessionId = /^[a-f0-9-]{36}$/.test(options.sessionId || '') ? options.sessionId : randomUUID();
+    const profile = path.join(this.dataDir, 'profiles', sessionId);
+    let sourceProfile = /^[a-f0-9-]{36}$/.test(options.profileSourceSessionId || '')
+      ? path.join(this.dataDir, 'profiles', options.profileSourceSessionId)
+      : null;
+    if ((!sourceProfile || !fs.existsSync(sourceProfile)) && ['chrome', 'helium'].includes(options.profileSourceBrowser)) {
+      sourceProfile = path.join(this.dataDir, 'profiles', options.profileSourceBrowser);
+    }
     let launchError;
     let exited = false;
     try {
       await this.startGroupBridge();
+      const profileCopySkipped = [];
+      copyBrowserDataDir(sourceProfile, profile, (entry) => profileCopySkipped.push(entry));
+      if (this.launchCancelled) throw new Error('Browser launch cancelled.');
+      const runtimeExtensionPath = path.join(profile, 'tabline-companion');
+      fs.rmSync(runtimeExtensionPath, { recursive: true, force: true });
+      fs.cpSync(this.extensionPath, runtimeExtensionPath, { recursive: true });
+      const extensionOrigin = this.bridgeOrigin();
+      for (const file of ['background.js', 'popup.js']) {
+        const full = path.join(runtimeExtensionPath, file);
+        fs.writeFileSync(full, fs.readFileSync(full, 'utf8').replaceAll('http://127.0.0.1:17637', extensionOrigin));
+      }
+      const portFile = path.join(profile, 'DevToolsActivePort');
+      try { fs.unlinkSync(portFile); } catch {}
       const child = spawn(executable, [
         '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', '--enable-automation',
         `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check',
@@ -364,6 +408,7 @@ class BrowserController extends EventEmitter {
       child.once('exit', () => { exited = true; if (this.process === child && (this.status === 'live' || this.status === 'stopping')) this.finish(); });
       let endpoint;
       for (let attempt = 0; attempt < 100; attempt++) {
+        if (this.launchCancelled) throw new Error('Browser launch cancelled.');
         if (launchError) throw launchError;
         if (exited) throw new Error('The browser exited before debugging was ready. Check the executable and close any browser using the Tabline profile.');
         try {
@@ -379,7 +424,7 @@ class BrowserController extends EventEmitter {
       if (!endpoint) throw new Error('The browser did not expose a debug connection within 15 seconds.');
       this.client = new CDP(endpoint);
       await this.client.connect();
-      this.session = { id: randomUUID(), name: options.name?.trim().slice(0, 80) || 'Untitled session', browser, startedAt: Date.now(), endedAt: null, tabs: [] };
+      this.session = { id: sessionId, name: options.name?.trim().slice(0, 80) || 'Untitled session', browser, startedAt: Date.now(), endedAt: null, browserDataDir: sessionId, profileSourceSessionId: options.profileSourceSessionId || null, profileCopySkipped, tabs: [] };
       this.client.on('Target.targetCreated', ({ targetInfo }) => this.onTarget(targetInfo));
       this.client.on('Target.targetInfoChanged', ({ targetInfo }) => this.onTarget(targetInfo));
       this.client.on('Target.targetDestroyed', ({ targetId }) => {
@@ -457,6 +502,7 @@ class BrowserController extends EventEmitter {
   }
 
   async startGroupBridge() {
+    if (this.groupBridge) return;
     this.groupToken = randomUUID();
     const headers = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' };
     const sendJson = (response, status, value) => { response.writeHead(status, { ...headers, 'Content-Type': 'application/json' }); response.end(JSON.stringify(value)); };
@@ -512,7 +558,8 @@ class BrowserController extends EventEmitter {
         }
       } catch (error) { sendJson(response, 400, { error: error.message || 'Request failed' }); }
     });
-    await new Promise((resolve, reject) => { this.groupBridge.once('error', reject); this.groupBridge.listen(17637, '127.0.0.1', resolve); });
+    await new Promise((resolve, reject) => { this.groupBridge.once('error', reject); this.groupBridge.listen(0, '127.0.0.1', resolve); });
+    this.bridgePort = this.groupBridge.address().port;
   }
 
   onGroupInfo(info) {
@@ -560,7 +607,7 @@ class BrowserController extends EventEmitter {
     const currentEntry = this.entryForTab(tab);
     if (currentEntry && currentEntry.active && tab.url === this.freezerUrl(currentEntry.slug)) return { tabId: tab.extensionTabId, targetId: tab.id, shortUrl: this.freezerUrl(currentEntry.slug), slug: currentEntry.slug, frozen: true };
     const originalUrl = currentEntry?.originalUrl || tab.originalUrl || tab.url;
-    if (!freezableUrl(originalUrl)) return { tabId: tab.extensionTabId, targetId: tab.id, skipped: 'This tab does not contain a web page.' };
+    if (!freezableUrl(originalUrl, this.bridgeOrigin())) return { tabId: tab.extensionTabId, targetId: tab.id, skipped: 'This tab does not contain a web page.' };
     if (this.isWhitelisted(originalUrl)) return { tabId: tab.extensionTabId, targetId: tab.id, skipped: 'This tab is whitelisted.' };
     clearTimeout(this.captureTimers.get(tab.id));
     this.captureTimers.delete(tab.id);
@@ -638,7 +685,7 @@ class BrowserController extends EventEmitter {
     const tab = this.tabForExtensionInfo(tabInfo);
     const entry = this.entryForTab(tab) || this.entryForUrl(tab?.url);
     const url = entry?.originalUrl || tab?.originalUrl || tab?.url;
-    if (!freezableUrl(url)) throw new Error('Only web pages can be whitelisted.');
+    if (!freezableUrl(url, this.bridgeOrigin())) throw new Error('Only web pages can be whitelisted.');
     this.freezer.whitelist = this.freezer.whitelist.filter((item) => item !== url);
     if (enabled) this.freezer.whitelist.push(url);
     this.persistFreezer();
@@ -777,13 +824,35 @@ class BrowserController extends EventEmitter {
   }
 
   async stop() {
+    if (this.status === 'launching') {
+      this.launchCancelled = true;
+      this.process?.kill();
+      this.client?.close();
+      this.groupBridge?.close();
+      this.groupBridge = null;
+      this.bridgePort = null;
+      this.status = 'idle';
+      this.publish();
+      return;
+    }
     if (this.status !== 'live') return;
+    const child = this.process;
     await this.refreshAllTargetLocations().catch(() => {});
     this.status = 'stopping';
     this.closingBrowser = true;
     for (const tab of this.session.tabs) if (!tab.closedAt) tab.openAtEnd = true;
     this.publish();
     try { await this.client.send('Browser.close'); } catch {}
+    if (child?.exitCode === null) {
+      const exited = await Promise.race([
+        new Promise((resolve) => child.exitCode === null ? child.once('exit', () => resolve(true)) : resolve(true)),
+        delay(5000).then(() => false),
+      ]);
+      if (!exited && child.exitCode === null) {
+        child.kill();
+        await Promise.race([new Promise((resolve) => child.exitCode === null ? child.once('exit', resolve) : resolve()), delay(2000)]);
+      }
+    }
     this.finish();
   }
 
@@ -805,6 +874,7 @@ class BrowserController extends EventEmitter {
     this.client = null;
     this.groupBridge?.close();
     this.groupBridge = null;
+    this.bridgePort = null;
     this.groupToken = null;
     this.pendingRestore = null;
     this.restoreResolve?.(null);
@@ -835,7 +905,7 @@ class BrowserController extends EventEmitter {
     this.pendingRestore = { plan, delivered: false };
     const resultPromise = new Promise((resolve) => { this.restoreResolve = resolve; });
     try {
-      await this.launch({ browser, executable, name: `${saved.name} (restored)`, url: plan.windows[0].tabs[0].url });
+      await this.launch({ browser, executable, name: `${saved.name} (restored)`, url: plan.windows[0].tabs[0].url, sessionId: options.sessionId, profileSourceSessionId: saved.browserDataDir || saved.id, profileSourceBrowser: saved.browser });
       this.session.restoredFromSessionId = saved.id;
       let result = await Promise.race([resultPromise, delay(5000).then(() => null)]);
       if (!result && this.pendingRestore?.delivered) result = await Promise.race([resultPromise, delay(30000).then(() => null)]);
@@ -899,4 +969,4 @@ class BrowserController extends EventEmitter {
   }
 }
 
-module.exports = { BrowserController, browserCandidates, buildRestorePlan, detectBrowsers, validStartUrl, upsertTarget };
+module.exports = { BrowserController, browserCandidates, buildRestorePlan, copyBrowserDataDir, detectBrowsers, validStartUrl, upsertTarget };

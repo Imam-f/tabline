@@ -4,6 +4,8 @@ A local-first Electron app that turns your Helium or Chrome browsing session int
 
 See [GitHub Releases](https://github.com/Imam-f/tabline/releases) for downloads and the changelog.
 
+The current release, **0.1.6**, adds concurrent browser sessions, isolated per-session profiles, and bulk saved-session organization with folders and selection.
+
 ## Screenshots
 
 The timeline connects each tab to the tab that opened it, with thumbnails and a details panel.
@@ -52,8 +54,20 @@ Installers are placed in `release/`. `npm run dist:dir` creates an unpacked desk
 - **Thumbnails** — real JPEG snapshots after page changes and approximately every 60 seconds. Select a tab to view a larger preview or refresh it manually.
 - **Tab details** — page history, parent and child tabs, duration, and buttons to focus or close an open browser tab.
 - **Tab freezer** — the Tabline companion extension can turn an individual tab into a persistent local short URL backed by its latest screenshot. Tabs inactive for five minutes get a preserved screenshot; after ten minutes they move to the snapshot page. The snapshot page has a floating return button, and the app's tab details panel also provides **Freeze tab** and **Return to original page** controls for live tabs. The extension can whitelist the current tab; its **Freeze all tabs** action freezes other tabs across all browser windows and virtual desktops, leaving the current tab and whitelisted pages untouched. Extension UI pages are excluded from the timeline.
-- **Saved sessions** — automatically persist timelines, navigation history, and thumbnails locally. Click a saved session to select it, double-click to open it, or drag it to reorder. Organize sessions into folders, rename or delete them, and export an opened session as portable JSON.
+- **Concurrent sessions** — track multiple browser sessions at once and switch between them from the session tabs or sidebar. Every session has an isolated browser data directory cloned from the previous session; restoring a saved session automatically duplicates its profile and timeline into a new live session.
+- **Saved sessions** — automatically persist timelines, navigation history, and thumbnails locally. Click a saved session to select it, double-click to open it, or drag it to reorder. Organize sessions into folders, rename or delete them, and export an opened session as portable JSON. Deleting a session also deletes its browser data directory.
 - **Demo mode** — explore an example timeline without launching a browser. The standalone web preview (`npm run dev:web`) uses the demo; browser launching requires Electron.
+
+## Long-term goals
+
+- **Global search** — search across all saved sessions, pages, navigation history, and archived content.
+- **Fuzzy search** — find relevant tabs and pages even when search terms are incomplete or slightly misspelled.
+- **Vector search** — use semantic similarity to discover related pages and browsing history by meaning, not only exact words.
+- **OCR** — extract searchable text from screenshots and captured page images.
+- **Automatic tagging** — classify and organize tabs and sessions using generated tags.
+- **Offline archive** — preserve a durable, fully local archive that remains searchable without network access.
+- **Screenshot graph editor** — edit and arrange relationships between captured screenshots as a visual graph.
+- **Screenshot annotator** — add notes, highlights, and other annotations directly to captured screenshots.
 
 ## How it works
 
@@ -62,14 +76,14 @@ The Electron main process starts the selected Chromium-based browser with:
 ```text
 --remote-debugging-port=0
 --remote-debugging-address=127.0.0.1
---user-data-dir=<Tabline app data>/browser-data/profiles/<browser>
+--user-data-dir=<Tabline app data>/browser-data/profiles/<session UUID>
 ```
 
 It reads the browser’s `DevToolsActivePort` file, connects to its local DevTools WebSocket, and subscribes to `Target` discovery events. Screenshots use short-lived flattened target sessions and `Page.captureScreenshot`. The companion extension is loaded only into Tabline’s dedicated browser profile because Chromium’s DevTools Protocol has no tab-group API.
 
 Google Chrome builds can reject the `--load-extension` flag for security reasons. When that happens, window/timeline tracking still works, but Chrome will not provide native tab-group metadata. Use Helium or a Chromium build that permits unpacked extensions for automatic group colors, or manually load `electron/tabline-extension/` into the managed profile from `chrome://extensions` with Developer mode enabled. If the browser does not expose a stable target ID, Tabline ignores ambiguous duplicate-URL matches rather than assigning a group to the wrong tab. Fallback colors are deterministic by group ID, not the browser’s native color.
 
-Tabline uses a dedicated, persistent browser profile per browser. This is required by current Chrome remote-debugging restrictions and keeps the tracked browser separate from your normal profile. Bookmarks, logins, and browser state within this profile persist between sessions. Only one tracked browser session runs at a time. Ending the session (or quitting the desktop app) closes the managed browser and saves its timeline.
+Tabline uses a dedicated, persistent browser profile per session. This is required by current Chrome remote-debugging restrictions and keeps tracked browsers separate from your normal profile. A new session copies the previous session's browser data, so bookmarks, logins, and browser state carry forward while each live browser remains isolated. Multiple tracked sessions can run at once. Ending a session closes only its managed browser and saves its timeline.
 
 The renderer is sandboxed with context isolation, no Node integration, a restrictive Content Security Policy, and a small preload IPC bridge. Debugging binds to localhost with an automatically assigned port. The app uses local fonts and does not send timeline data to a service.
 
@@ -91,7 +105,7 @@ Data lives inside Electron’s platform-specific `userData` directory:
 | macOS | `~/Library/Application Support/tabline/browser-data/` |
 | Linux | `~/.config/tabline/browser-data/` |
 
-The `sessions/` folder contains JSON sessions (including base64 JPEG thumbnails). `freezer.json` contains persistent local short-URL mappings, whitelist entries, and frozen screenshots. The `profiles/` folder contains the dedicated browser profiles. URLs and visible page content can be present in session exports and freezer data.
+The `sessions/` folder contains JSON sessions (including base64 JPEG thumbnails). `freezer.json` contains persistent local short-URL mappings, whitelist entries, and frozen screenshots. The `profiles/` folder contains one UUID-named browser data directory per session. Deleting a session removes both its JSON and profile directory. URLs and visible page content can be present in session exports and freezer data.
 
 ## Development & checks
 
@@ -110,6 +124,7 @@ The browser integration check detects an installed browser, launches it with a t
 electron/
   main.cjs                Electron window, IPC, and lifecycle
   preload.cjs             Sandboxed renderer bridge
+  session-manager.cjs     Concurrent browser-session routing and active-session state
   browser.cjs             Browser launch, tracking, capture, persistence, restore, freezer
   cdp.cjs                 DevTools WebSocket client
   virtual-desktop.cjs     Windows virtual-desktop helper process bridge

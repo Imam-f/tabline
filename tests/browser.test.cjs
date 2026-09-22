@@ -2,8 +2,9 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { WebSocketServer } = require('ws');
 const { CDP } = require('../electron/cdp.cjs');
-const { upsertTarget, validStartUrl, browserCandidates, buildRestorePlan } = require('../electron/browser.cjs');
+const { upsertTarget, validStartUrl, browserCandidates, buildRestorePlan, copyBrowserDataDir } = require('../electron/browser.cjs');
 const { BrowserController } = require('../electron/browser.cjs');
+const { SessionManager } = require('../electron/session-manager.cjs');
 
 test('tracks one lifetime per page, preserves opener and records actual navigations', () => {
   const session = { tabs: [] };
@@ -178,7 +179,7 @@ test('localhost group bridge applies group color metadata to the matching tab', 
   controller.session = { tabs: [{ id: 'target', windowId: '42', url: 'https://example.com', title: 'Example', groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [] }] };
   await controller.startGroupBridge();
   try {
-    const response = await fetch('http://127.0.0.1:17637/tab-groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabs: [{ targetId: 'target', windowId: 42, url: 'https://example.com', title: 'Example', groupId: 9, groupTitle: 'Research', groupColor: 'purple', groupCollapsed: false }] }) });
+    const response = await fetch(`${controller.bridgeOrigin()}/tab-groups`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabs: [{ targetId: 'target', windowId: 42, url: 'https://example.com', title: 'Example', groupId: 9, groupTitle: 'Research', groupColor: 'purple', groupCollapsed: false }] }) });
     assert.equal(response.status, 204);
     assert.equal(controller.session.tabs[0].groupId, 9);
     assert.equal(controller.session.tabs[0].groupTitle, 'Research');
@@ -196,26 +197,83 @@ test('freezes a tab into a persistent local snapshot URL and restores it', async
   controller.status = 'live';
   controller.session = { tabs: [{ id: 'target', title: 'Example', url: 'https://example.com', closedAt: null, extensionTabId: 4, extensionWindowId: 8, thumbnail: null, frozen: false, frozenSlug: null, originalUrl: null }] };
   controller.capture = async () => { controller.session.tabs[0].thumbnail = 'data:image/jpeg;base64,c2NyZWVuc2hvdA=='; return controller.session.tabs[0].thumbnail; };
-  const frozen = await controller.freezeTab({ targetId: 'target', tabId: 4, windowId: 8, url: 'https://example.com', title: 'Example' });
-  assert.match(frozen.shortUrl, /^http:\/\/127\.0\.0\.1:17637\/s\//);
-  const saved = JSON.parse(require('node:fs').readFileSync(require('node:path').join(dataDir, 'freezer.json'), 'utf8'));
-  assert.equal(saved.entries[0].originalUrl, 'https://example.com');
-  assert.equal(saved.entries[0].screenshot, 'data:image/jpeg;base64,c2NyZWVuc2hvdA==');
-  const reloaded = new BrowserController(dataDir);
-  assert.equal(reloaded.entryForSlug(frozen.slug).originalUrl, 'https://example.com');
   await controller.startGroupBridge();
   try {
+    const frozen = await controller.freezeTab({ targetId: 'target', tabId: 4, windowId: 8, url: 'https://example.com', title: 'Example' });
+    assert.match(frozen.shortUrl, new RegExp(`^${controller.bridgeOrigin().replaceAll('.', '\\.')}/s/`));
+    const saved = JSON.parse(require('node:fs').readFileSync(require('node:path').join(dataDir, 'freezer.json'), 'utf8'));
+    assert.equal(saved.entries[0].originalUrl, 'https://example.com');
+    assert.equal(saved.entries[0].screenshot, 'data:image/jpeg;base64,c2NyZWVuc2hvdA==');
+    const reloaded = new BrowserController(dataDir);
+    assert.equal(reloaded.entryForSlug(frozen.slug).originalUrl, 'https://example.com');
     const page = await fetch(frozen.shortUrl);
     const html = await page.text();
     assert.match(html, /Return to original page/);
     assert.match(html, /data:image\/jpeg;base64,c2NyZWVuc2hvdA==/);
-    const result = await fetch(`http://127.0.0.1:17637/unfreeze/${frozen.slug}`, { method: 'POST' });
+    const result = await fetch(`${controller.bridgeOrigin()}/unfreeze/${frozen.slug}`, { method: 'POST' });
     assert.deepEqual(await result.json(), { originalUrl: 'https://example.com', slug: frozen.slug });
     assert.equal(controller.freezer.entries[0].active, false);
   } finally {
     controller.groupBridge.close();
     clearTimeout(controller.persistTimer);
   }
+});
+
+test('copies browser data into a unique profile without transient process locks', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'tabline-profile-copy-'));
+  const source = path.join(root, 'source');
+  const destination = path.join(root, 'destination');
+  fs.mkdirSync(path.join(source, 'Default'), { recursive: true });
+  fs.writeFileSync(path.join(source, 'Default', 'Cookies'), 'session-cookie');
+  fs.writeFileSync(path.join(source, 'Local State'), 'browser-state');
+  fs.writeFileSync(path.join(source, 'DevToolsActivePort'), '1234');
+
+  assert.equal(copyBrowserDataDir(source, destination), true);
+  assert.equal(fs.readFileSync(path.join(destination, 'Default', 'Cookies'), 'utf8'), 'session-cookie');
+  assert.equal(fs.readFileSync(path.join(destination, 'Local State'), 'utf8'), 'browser-state');
+  assert.equal(fs.existsSync(path.join(destination, 'DevToolsActivePort')), false);
+});
+
+test('deleting a session also deletes its browser data directory', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { randomUUID } = require('node:crypto');
+  const dataDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'tabline-session-delete-'));
+  const controller = new BrowserController(dataDir);
+  const id = randomUUID();
+  const profile = path.join(dataDir, 'profiles', id);
+  fs.mkdirSync(profile, { recursive: true });
+  fs.writeFileSync(path.join(profile, 'Local State'), 'state');
+  fs.writeFileSync(path.join(dataDir, 'sessions', `${id}.json`), JSON.stringify({ id, tabs: [] }));
+
+  controller.deleteSession(id);
+
+  assert.equal(fs.existsSync(path.join(dataDir, 'sessions', `${id}.json`)), false);
+  assert.equal(fs.existsSync(profile), false);
+});
+
+test('closing a stopped session tab keeps its saved data and browser profile', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { randomUUID } = require('node:crypto');
+  const dataDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'tabline-session-close-'));
+  const manager = new SessionManager(dataDir);
+  const id = randomUUID();
+  const session = { id, name: 'Stopped', browser: 'chrome', startedAt: 1, endedAt: 2, tabs: [] };
+  const profile = path.join(dataDir, 'profiles', id);
+  const saved = path.join(dataDir, 'sessions', `${id}.json`);
+  fs.mkdirSync(profile, { recursive: true });
+  fs.writeFileSync(saved, JSON.stringify(session));
+  manager.controllers.set(id, { status: 'idle', session, snapshot: () => ({ status: 'idle', session, debugPort: null, error: null }) });
+  manager.activeSessionId = id;
+
+  const state = manager.closeSession(id);
+
+  assert.equal(state.session, null);
+  assert.equal(fs.existsSync(saved), true);
+  assert.equal(fs.existsSync(profile), true);
 });
 
 test('freeze all skips a persistent whitelist across browser windows', async () => {

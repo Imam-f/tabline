@@ -67,7 +67,7 @@ async function waitFor(predicate, label, timeout = 25000) {
     await waitFor(() => evaluate(`!document.querySelector('.live-badge') && !document.querySelector('.modal')`), 'session stopped');
     await evaluate(`[...document.querySelectorAll('.nav-item')].find(e=>e.innerText.includes('Saved sessions')).click()`);
     await waitFor(() => evaluate(`document.querySelectorAll('.saved-session').length === 1`), 'saved session list');
-    await evaluate(`document.querySelector('.saved-session-view').click()`);
+    await evaluate(`document.querySelector('.saved-session-view').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);
     await waitFor(() => evaluate(`!!document.querySelector('.tab-bar.is-closed')`), 'archived timeline reopened');
     await evaluate(`[...document.querySelectorAll('.nav-item')].find(e=>e.innerText.includes('Saved sessions')).click()`);
     await waitFor(() => evaluate(`!!document.querySelector('.restore-session:not(:disabled)')`), 'restore action');
