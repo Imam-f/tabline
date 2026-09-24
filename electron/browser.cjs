@@ -5,12 +5,24 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const http = require('node:http');
+const net = require('node:net');
 const { CDP } = require('./cdp.cjs');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const inactivityScreenshotAfter = 5 * 60 * 1000;
 const inactivityFreezeAfter = 10 * 60 * 1000;
 const transientProfileFiles = new Set(['DevToolsActivePort', 'SingletonCookie', 'SingletonLock', 'SingletonSocket']);
+
+function availableDebugPort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      server.close((error) => error ? reject(error) : resolve(port));
+    });
+  });
+}
 
 function freezableUrl(url, localBridgeOrigin = null) {
   try { const parsed = new URL(url); return ['http:', 'https:'].includes(parsed.protocol) && parsed.origin !== localBridgeOrigin; } catch { return false; }
@@ -393,10 +405,11 @@ class BrowserController extends EventEmitter {
         const full = path.join(runtimeExtensionPath, file);
         fs.writeFileSync(full, fs.readFileSync(full, 'utf8').replaceAll('http://127.0.0.1:17637', extensionOrigin));
       }
-      const portFile = path.join(profile, 'DevToolsActivePort');
-      try { fs.unlinkSync(portFile); } catch {}
+      // Port 0 (and --enable-automation) puts Chrome in automation mode, which
+      // displays an infobar and can prevent Google account sign-in.
+      const debugPort = await availableDebugPort();
       const child = spawn(executable, [
-        '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', '--enable-automation',
+        `--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1',
         `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check',
         '--disable-background-mode', '--new-window',
         '--enable-extensions', `--load-extension=${runtimeExtensionPath}`,
@@ -412,12 +425,15 @@ class BrowserController extends EventEmitter {
         if (launchError) throw launchError;
         if (exited) throw new Error('The browser exited before debugging was ready. Check the executable and close any browser using the Tabline profile.');
         try {
-          const [port, wsPath] = fs.readFileSync(portFile, 'utf8').trim().split(/\r?\n/);
-          if (/^\d+$/.test(port) && wsPath?.startsWith('/devtools/browser/')) {
-            this.debugPort = Number(port);
-            endpoint = `ws://127.0.0.1:${port}${wsPath}`;
-            break;
+          const response = await fetch(`http://127.0.0.1:${debugPort}/json/version`, { signal: AbortSignal.timeout(500) });
+          if (response.ok) {
+            const candidate = new URL((await response.json()).webSocketDebuggerUrl);
+            if (candidate.protocol === 'ws:' && candidate.hostname === '127.0.0.1' && candidate.port === String(debugPort) && candidate.pathname.startsWith('/devtools/browser/')) {
+              this.debugPort = debugPort;
+              endpoint = candidate.href;
+            }
           }
+          if (endpoint) break;
         } catch {}
         await delay(150);
       }

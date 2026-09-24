@@ -74,12 +74,12 @@ Installers are placed in `release/`. `npm run dist:dir` creates an unpacked desk
 The Electron main process starts the selected Chromium-based browser with:
 
 ```text
---remote-debugging-port=0
+--remote-debugging-port=<available local port>
 --remote-debugging-address=127.0.0.1
 --user-data-dir=<Tabline app data>/browser-data/profiles/<session UUID>
 ```
 
-It reads the browser’s `DevToolsActivePort` file, connects to its local DevTools WebSocket, and subscribes to `Target` discovery events. Screenshots use short-lived flattened target sessions and `Page.captureScreenshot`. The companion extension is loaded only into Tabline’s dedicated browser profile because Chromium’s DevTools Protocol has no tab-group API.
+It discovers the browser’s DevTools WebSocket through the local `/json/version` endpoint and subscribes to `Target` discovery events. A nonzero debugging port avoids Chrome's automation mode, which displays the “controlled by automated test software” banner and can block Google sign-in. Screenshots use short-lived flattened target sessions and `Page.captureScreenshot`. The companion extension is loaded only into Tabline’s dedicated browser profile because Chromium’s DevTools Protocol has no tab-group API.
 
 Google Chrome builds can reject the `--load-extension` flag for security reasons. When that happens, window/timeline tracking still works, but Chrome will not provide native tab-group metadata. Use Helium or a Chromium build that permits unpacked extensions for automatic group colors, or manually load `electron/tabline-extension/` into the managed profile from `chrome://extensions` with Developer mode enabled. If the browser does not expose a stable target ID, Tabline ignores ambiguous duplicate-URL matches rather than assigning a group to the wrong tab. Fallback colors are deterministic by group ID, not the browser’s native color.
 

@@ -51,6 +51,8 @@ const waitFor = async (predicate, label, timeout = 20000) => {
     const parent = await waitFor(() => controller.session.tabs.find((tab) => tab.title === 'Parent tab'), 'initial tab');
     await waitFor(() => parent.windowId, 'initial browser window ID');
     const { sessionId } = await controller.client.send('Target.attachToTarget', { targetId: parent.id, flatten: true });
+    const automation = await controller.client.send('Runtime.evaluate', { expression: 'navigator.webdriver', returnByValue: true }, sessionId);
+    assert.equal(automation.result.value, false, 'managed browser should not be in Chrome automation mode');
     await controller.client.send('Runtime.evaluate', { expression: `window.open('${base}/child', '_blank')`, userGesture: true }, sessionId);
     const child = await waitFor(() => controller.session.tabs.find((tab) => tab.title === 'Child tab'), 'child tab');
     assert.equal(child.openerId, parent.id, 'child tab should retain its opener');
@@ -78,7 +80,7 @@ const waitFor = async (predicate, label, timeout = 20000) => {
     const saved = controller.loadSession(controller.session.id);
     assert.equal(saved.tabs.find((tab) => tab.id === child.id).openerId, parent.id);
     assert.ok(saved.tabs.find((tab) => tab.id === child.id).thumbnail);
-    console.log('PASS: browser launch, discovery, opener arrows, JPEG capture, navigation, focus, closure, and session persistence.');
+    console.log('PASS: browser launch without automation mode, discovery, opener arrows, JPEG capture, navigation, focus, closure, and session persistence.');
   } finally {
     await controller.stop();
     clearTimeout(controller.persistTimer);
