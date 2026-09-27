@@ -1,4 +1,5 @@
 export interface Navigation { url: string; title: string; at: number }
+export interface BrowserActivity { at: number; focusedWindowId: string | null; windows: Array<{ windowId: string; tabId: string | null }> }
 export interface BrowserTab {
   id: string;
   title: string;
@@ -42,6 +43,7 @@ export interface Session {
   browserDataDir?: string;
   profileSourceSessionId?: string | null;
   profileCopySkipped?: string[];
+  activityHistory?: BrowserActivity[];
   tabs: BrowserTab[];
 }
 export interface RuntimeSessionState {

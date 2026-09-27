@@ -143,6 +143,34 @@ test('tracks tab strip moves without duplicating unchanged order history', () =>
   clearTimeout(controller.persistTimer);
 });
 
+test('records focused window and each window active tab only when activity changes', () => {
+  const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-activity-')));
+  controller.session = { tabs: [
+    upsertTarget({ tabs: [] }, { type: 'page', targetId: 'one', windowId: '10', url: 'https://one.example' }, 1),
+    upsertTarget({ tabs: [] }, { type: 'page', targetId: 'two', windowId: '10', url: 'https://two.example' }, 1),
+    upsertTarget({ tabs: [] }, { type: 'page', targetId: 'three', windowId: '20', url: 'https://three.example' }, 1),
+  ], activityHistory: [] };
+  const one = { targetId: 'one', tabId: 1, windowId: 10, index: 0, active: true, url: 'https://one.example' };
+  const two = { targetId: 'two', tabId: 2, windowId: 10, index: 1, active: false, url: 'https://two.example' };
+  const three = { targetId: 'three', tabId: 3, windowId: 20, index: 0, active: true, url: 'https://three.example' };
+  controller.onTabSnapshot({ source: 'worker', sequence: 1, focusedWindowId: 10, tabs: [one, two, three] });
+  controller.onTabSnapshot({ source: 'worker', sequence: 2, focusedWindowId: 10, tabs: [one, two, three] });
+  assert.equal(controller.session.activityHistory.length, 1);
+  assert.deepEqual(controller.session.activityHistory[0].windows, [{ windowId: '10', tabId: 'one' }, { windowId: '20', tabId: 'three' }]);
+  controller.onTabSnapshot({ source: 'worker', sequence: 3, focusedWindowId: 20, tabs: [one, two, three] });
+  controller.onTabSnapshot({ source: 'worker', sequence: 4, focusedWindowId: 20, tabs: [{ ...one, active: false }, { ...two, active: true }, three] });
+  controller.onTabSnapshot({ source: 'worker', sequence: 2, focusedWindowId: 10, tabs: [one, two, three] });
+  assert.equal(controller.session.activityHistory.length, 3);
+  assert.equal(controller.session.activityHistory[1].focusedWindowId, '20');
+  assert.deepEqual(controller.session.activityHistory[2].windows, [{ windowId: '10', tabId: 'two' }, { windowId: '20', tabId: 'three' }]);
+  assert.equal(controller.session.tabs.find((tab) => tab.id === 'one').active, false);
+  assert.equal(controller.session.tabs.find((tab) => tab.id === 'three').focused, true);
+  controller.onTabSnapshot({ source: 'worker', sequence: 5, focusedWindowId: null, tabs: [{ ...one, active: false }, { ...two, active: true }, three] });
+  assert.equal(controller.session.activityHistory.at(-1).focusedWindowId, null);
+  assert.equal(controller.session.tabs.some((tab) => tab.focused), false);
+  clearTimeout(controller.persistTimer);
+});
+
 test('reorders saved sessions and persists their per-folder order', () => {
   const fs = require('node:fs');
   const path = require('node:path');

@@ -1,6 +1,8 @@
 const bridgeOrigin = 'http://127.0.0.1:17637';
 const bridgeUrl = `${bridgeOrigin}/tab-groups`;
 let restoring = false;
+let snapshotSequence = 0;
+const snapshotSource = crypto.randomUUID();
 
 async function targetMap() {
   try {
@@ -28,6 +30,7 @@ function queryWindows() {
 
 async function sendSnapshot(tabIds = null) {
   if (!bridgeUrl) return;
+  const sequence = ++snapshotSequence;
   const targets = await targetMap();
   const tabs = await queryTabs();
   const windows = await queryWindows();
@@ -44,7 +47,7 @@ async function sendSnapshot(tabIds = null) {
       try { const group = await new Promise((resolve, reject) => chrome.tabGroups.get(item.groupId, (value) => chrome.runtime.lastError ? reject(chrome.runtime.lastError) : resolve(value))); Object.assign(item, { groupTitle: group.title || null, groupColor: group.color || null, groupCollapsed: !!group.collapsed }); } catch {}
     }
   }
-  fetch(bridgeUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabs: payload }) }).catch(() => {});
+  fetch(bridgeUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabs: payload, focusedWindowId: [...focusedWindows][0] ?? null, sequence, source: snapshotSource }) }).catch(() => {});
 }
 
 function callChrome(method, ...args) {

@@ -50,6 +50,7 @@ const waitFor = async (predicate, label, timeout = 20000) => {
     if (companion) assert.ok(companion.url.startsWith('chrome-extension://'), 'Tabline companion extension should be installed in the managed browser');
     const parent = await waitFor(() => controller.session.tabs.find((tab) => tab.title === 'Parent tab'), 'initial tab');
     await waitFor(() => parent.windowId, 'initial browser window ID');
+    await waitFor(() => controller.session.activityHistory?.some((activity) => activity.windows.some((window) => window.tabId === parent.id)), 'active tab snapshot');
     const { sessionId } = await controller.client.send('Target.attachToTarget', { targetId: parent.id, flatten: true });
     const automation = await controller.client.send('Runtime.evaluate', { expression: 'navigator.webdriver', returnByValue: true }, sessionId);
     assert.equal(automation.result.value, false, 'managed browser should not be in Chrome automation mode');
@@ -60,6 +61,7 @@ const waitFor = async (predicate, label, timeout = 20000) => {
     const secondWindow = await controller.client.send('Target.createTarget', { url: `${base}/next`, newWindow: true });
     const separateWindowTab = await waitFor(() => controller.session.tabs.find((tab) => tab.id === secondWindow.targetId && tab.windowId), 'second browser window');
     assert.notEqual(separateWindowTab.windowId, parent.windowId, 'separate browser windows should produce separate timeline groups');
+    await waitFor(() => controller.session.activityHistory.some((activity) => activity.windows.some((window) => window.tabId === separateWindowTab.id)), 'second window active tab snapshot');
     assert.ok(parent.windowHistory.length >= 1, 'window assignment should be recorded without page activity');
     await controller.capture(child.id);
     assert.ok(child.thumbnail?.startsWith('data:image/jpeg;base64,'), 'captures real tab thumbnail');
