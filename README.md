@@ -4,7 +4,7 @@ A local-first Electron app that turns your Helium or Chrome browsing session int
 
 See [GitHub Releases](https://github.com/Imam-f/tabline/releases) for downloads and the changelog.
 
-The current release, **0.1.6**, adds concurrent browser sessions, isolated per-session profiles, and bulk saved-session organization with folders and selection.
+The current release, **0.1.7**, adds a second-by-second active-tab timeline, full-resolution tab screenshots, and a browser launch that avoids Chrome's automation banner. Activity history is saved with each session and included in JSON exports.
 
 ## Screenshots
 
