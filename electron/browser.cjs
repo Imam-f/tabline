@@ -507,7 +507,7 @@ class BrowserController extends EventEmitter {
       clearTimeout(this.captureTimers.get(tab.id));
       this.captureTimers.set(tab.id, setTimeout(() => {
         this.captureTimers.delete(tab.id);
-        this.capture(tab.id).catch(() => {});
+        if (!tab.active) this.capture(tab.id).catch(() => {});
       }, 1600));
     }
   }
@@ -599,9 +599,11 @@ class BrowserController extends EventEmitter {
     tab.pinned = typeof info.pinned === 'boolean' ? info.pinned : !!tab.pinned;
     tab.active = nextActive;
     tab.focused = typeof info.focused === 'boolean' ? info.focused : !!tab.focused;
-    if (nextActive && (!wasActive || !tab.lastActiveAt)) {
-      tab.lastActiveAt = now;
+    if (nextActive) {
+      if (!wasActive || !tab.lastActiveAt) tab.lastActiveAt = now;
       tab.inactiveScreenshotAt = null;
+      clearTimeout(this.captureTimers.get(tab.id));
+      this.captureTimers.delete(tab.id);
     } else if (!nextActive && !tab.lastActiveAt) tab.lastActiveAt = now;
     if (!tab.orderHistory) tab.orderHistory = [];
     if (orderChanged) tab.orderHistory.push({ windowId: tab.extensionWindowId, index: tab.tabIndex, at: Date.now() });
@@ -806,7 +808,7 @@ class BrowserController extends EventEmitter {
       const height = Math.max(1, viewport.clientHeight);
       const { data } = await client.send('Page.captureScreenshot', {
         format: 'jpeg', quality: 55, captureBeyondViewport: false,
-        clip: { x: viewport.pageX || 0, y: viewport.pageY || 0, width, height, scale: Math.min(1, 560 / width) },
+        clip: { x: viewport.pageX || 0, y: viewport.pageY || 0, width, height, scale: 1 },
       }, sessionId);
       if (tab.closedAt || this.client !== client) return;
       tab.thumbnail = `data:image/jpeg;base64,${data}`;
@@ -822,7 +824,7 @@ class BrowserController extends EventEmitter {
     if (this.captureBusy || this.status !== 'live') return;
     this.captureBusy = true;
     try {
-      for (const tab of this.session.tabs.filter((item) => !item.closedAt && !item.frozen && !item.inactiveScreenshotAt && item.active === false)) {
+      for (const tab of this.session.tabs.filter((item) => !item.closedAt && !item.frozen && !item.inactiveScreenshotAt)) {
         if (this.status !== 'live') break;
         await this.capture(tab.id).catch(() => {});
       }

@@ -348,6 +348,20 @@ test('captures after five inactive minutes and freezes at ten without recapturin
   clearTimeout(controller.persistTimer);
 });
 
+test('periodic captures include active tabs', async () => {
+  const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-active-capture-')));
+  controller.status = 'live';
+  controller.session = { tabs: [
+    { id: 'active', closedAt: null, frozen: false, inactiveScreenshotAt: null },
+    { id: 'frozen', closedAt: null, frozen: true, inactiveScreenshotAt: null },
+  ] };
+  const captured = [];
+  controller.capture = async (id) => { captured.push(id); };
+  await controller.captureAll();
+  assert.deepEqual(captured, ['active']);
+  clearTimeout(controller.persistTimer);
+});
+
 test('group updates catch an ungrouped tab moved into a group without a target ID', () => {
   const controller = new BrowserController(require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'tabline-group-move-')));
   controller.session = { tabs: [{ id: 'target', windowId: '42', url: 'https://example.com', title: 'Example', groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [] }] };
