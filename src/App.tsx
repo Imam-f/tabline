@@ -11,9 +11,15 @@ import NetworkPanel from './NetworkPanel';
 
 const api = window.tabline;
 const launchPreferencesKey = 'tabline.launch-preferences';
-type LaunchPreferences = { browser?: 'helium' | 'chrome'; executable?: string };
+type BrowserId = 'helium' | 'chrome';
+type LaunchPreferences = { browser?: BrowserId; executables?: Partial<Record<BrowserId, string>> };
 function readLaunchPreferences(): LaunchPreferences {
-  try { return JSON.parse(localStorage.getItem(launchPreferencesKey) || '{}'); } catch { return {}; }
+  try {
+    // Older versions stored a single `executable` that belonged to `browser`; keep it under that browser.
+    const { executable, ...preferences } = JSON.parse(localStorage.getItem(launchPreferencesKey) || '{}') as LaunchPreferences & { executable?: string };
+    if (executable && preferences.browser && !preferences.executables?.[preferences.browser]) preferences.executables = { ...preferences.executables, [preferences.browser]: executable };
+    return preferences;
+  } catch { return {}; }
 }
 function writeLaunchPreferences(preferences: LaunchPreferences) {
   try { localStorage.setItem(launchPreferencesKey, JSON.stringify(preferences)); } catch {}
@@ -156,7 +162,8 @@ export default function App() {
     if (!api) return;
     await action(async () => {
       const preferences = readLaunchPreferences();
-      const result = await api.restoreSession(id, { ...preferences, at: id === session?.id ? restoreTime : undefined });
+      const executable = preferences.browser ? preferences.executables?.[preferences.browser] : undefined;
+      const result = await api.restoreSession(id, { browser: preferences.browser, executable: executable || undefined, at: id === session?.id ? restoreTime : undefined });
       setState(result.state);
       setArchived(null);
       setRemote(null); setDemo(null);
@@ -663,22 +670,24 @@ function LaunchDialog({ onClose, onLaunch, onDemo, running }: { onClose: () => v
   const preferences = useRef<LaunchPreferences | null>(null);
   if (!preferences.current) preferences.current = readLaunchPreferences();
   const [browsers, setBrowsers] = useState<BrowserChoice[]>([]);
-  const [browser, setBrowser] = useState<'helium' | 'chrome'>(preferences.current.browser || 'helium');
-  const [executable, setExecutable] = useState(preferences.current.executable || '');
+  const [browser, setBrowser] = useState<BrowserId>(preferences.current.browser || 'helium');
+  const [executables, setExecutables] = useState<Partial<Record<BrowserId, string>>>(preferences.current.executables || {});
+  const executable = executables[browser] || '';
+  const setExecutable = (value: string, target: BrowserId = browser) => setExecutables((current) => ({ ...current, [target]: value }));
   const [name, setName] = useState('A new rabbit hole');
   const [url, setUrl] = useState('https://www.google.com');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [advanced, setAdvanced] = useState(false);
-  useEffect(() => { api?.getBrowsers().then((items) => { setBrowsers(items); const saved = preferences.current; const savedUsable = !!saved?.executable || !!items.find((item) => item.id === saved?.browser)?.path; if (!savedUsable) setBrowser(items.find((item) => item.id === 'helium')?.path ? 'helium' : 'chrome'); }).catch((err) => setError(err.message)); }, []);
+  useEffect(() => { api?.getBrowsers().then((items) => { setBrowsers(items); const saved = preferences.current; const savedBrowser = saved?.browser || 'helium'; const savedUsable = !!saved?.executables?.[savedBrowser] || !!items.find((item) => item.id === savedBrowser)?.path; if (!savedUsable) setBrowser(items.find((item) => item.id === 'helium')?.path ? 'helium' : 'chrome'); }).catch((err) => setError(err.message)); }, []);
   return <Modal title="Where will curiosity take you?" subtitle="Start a fresh browser session. We’ll connect the dots." onClose={busy ? () => {} : onClose}>
     {!api ? <div className="desktop-notice"><Monitor size={19}/><div><strong>You’re in the web preview.</strong><p>Browser launching is available in the Electron desktop app. Run <code>npm run dev</code> from this project to connect a local browser.</p></div></div> : running ? <div className="desktop-notice"><Radio size={19}/><div><strong>A session is already running.</strong><p>End your current session before starting a new one.</p></div></div> : null}
-    <form onSubmit={async (event) => { event.preventDefault(); setBusy(true); setError(''); try { writeLaunchPreferences({ browser, executable }); await onLaunch({ browser, executable: executable || undefined, url, name }); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to launch the browser.'); } finally { setBusy(false); } }}>
-      <label className="field-label">YOUR BROWSER</label><div className="browser-options">{(['helium', 'chrome'] as const).map((item) => <button type="button" key={item} className={`browser-option ${browser === item ? 'selected' : ''}`} onClick={() => { setBrowser(item); setExecutable(''); }}><span className={`browser-logo ${item}`}>{item === 'helium' ? <span>He</span> : <Globe2 size={24}/>}</span><span><strong>{item === 'helium' ? 'Helium' : 'Google Chrome'}</strong><small>{api ? browsers.find((b) => b.id === item)?.path ? 'Detected on your device' : 'Choose an executable' : 'Chromium-powered'}</small></span><span className="radio-circle">{browser === item && <span/>}</span></button>)}</div>
+    <form onSubmit={async (event) => { event.preventDefault(); setBusy(true); setError(''); try { writeLaunchPreferences({ browser, executables }); await onLaunch({ browser, executable: executable || undefined, url, name }); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to launch the browser.'); } finally { setBusy(false); } }}>
+      <label className="field-label">YOUR BROWSER</label><div className="browser-options">{(['helium', 'chrome'] as const).map((item) => <button type="button" key={item} className={`browser-option ${browser === item ? 'selected' : ''}`} onClick={() => setBrowser(item)}><span className={`browser-logo ${item}`}>{item === 'helium' ? <span>He</span> : <Globe2 size={24}/>}</span><span><strong>{item === 'helium' ? 'Helium' : 'Google Chrome'}</strong><small>{api ? browsers.find((b) => b.id === item)?.path ? 'Detected on your device' : 'Choose an executable' : 'Chromium-powered'}</small></span><span className="radio-circle">{browser === item && <span/>}</span></button>)}</div>
       <label className="field-label" htmlFor="session-name">SESSION NAME</label><input id="session-name" className="form-input" value={name} onChange={(event) => setName(event.target.value)} placeholder="A new rabbit hole" maxLength={80}/>
       <label className="field-label" htmlFor="start-url">STARTING PAGE</label><input id="start-url" className="form-input" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://www.google.com"/>
       <button type="button" className="advanced-toggle" onClick={() => setAdvanced(!advanced)}><Settings2 size={14}/>Browser executable <ChevronDown size={13} className={advanced ? 'rotate' : ''}/></button>
-      {advanced && <div className="executable-field"><input className="form-input" aria-label="Browser executable path" value={executable} onChange={(event) => setExecutable(event.target.value)} placeholder={browsers.find((item) => item.id === browser)?.path || 'Full path to browser executable'}/><button type="button" className="button secondary" disabled={!api} onClick={async () => { try { const result = await api!.chooseExecutable(); if (result) setExecutable(result); } catch (err) { setError(String(err)); } }}><FolderOpen size={16}/>Browse</button></div>}
+      {advanced && <div className="executable-field"><input className="form-input" aria-label="Browser executable path" value={executable} onChange={(event) => setExecutable(event.target.value)} placeholder={browsers.find((item) => item.id === browser)?.path || 'Full path to browser executable'}/><button type="button" className="button secondary" disabled={!api} onClick={async () => { const target = browser; try { const result = await api!.chooseExecutable(); if (result) setExecutable(result, target); } catch (err) { setError(String(err)); } }}><FolderOpen size={16}/>Browse</button></div>}
       <div className="profile-note"><ShieldCheck size={15}/><span>A dedicated browser profile. A localhost-only connection.<br/>Your usual browser stays right where it is.</span></div>
       {error && <div className="form-error" role="alert">{error}</div>}
       <button type="submit" className="button primary full-width launch-submit" disabled={!api || running || busy}>{busy ? <RefreshCw size={16} className="spinning"/> : <ArrowUpRight size={17}/>} {busy ? 'Connecting your browser…' : `Launch ${browser === 'helium' ? 'Helium' : 'Chrome'}`}</button>

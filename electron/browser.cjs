@@ -7,6 +7,7 @@ const { randomUUID } = require('node:crypto');
 const http = require('node:http');
 const net = require('node:net');
 const { CDP } = require('./cdp.cjs');
+const { readJson, writeJson, jsonFiles, deleteJson } = require('./storage.cjs');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const inactivityScreenshotAfter = 5 * 60 * 1000;
@@ -166,7 +167,7 @@ class BrowserController extends EventEmitter {
     this.lastCompanionSnapshotAt = 0;
     this.debugPort = null;
     this.lastError = null;
-    this.persistTimer = null;
+    this.lastPersistedSession = null;
     this.extensionPath = extensionPath;
     this.groupBridge = null;
     this.bridgePort = null;
@@ -180,30 +181,44 @@ class BrowserController extends EventEmitter {
 
   snapshot() { return { status: this.status, session: this.session, debugPort: this.debugPort, error: this.lastError }; }
   publish() {
+    // Save before notifying the renderer: crashes must not strand acknowledged
+    // changes behind a debounce timer, especially during continuous activity.
+    this.persist();
     this.emit('change', this.snapshot());
-    clearTimeout(this.persistTimer);
-    this.persistTimer = setTimeout(() => this.persist(), 1200);
   }
   persist() {
-    if (!this.session) return;
+    if (!this.session || !/^[a-f0-9-]{36}$/.test(this.session.id || '')) return;
     const destination = path.join(this.dataDir, 'sessions', `${this.session.id}.json`);
     try {
-      fs.writeFileSync(`${destination}.tmp`, JSON.stringify(this.session));
-      fs.renameSync(`${destination}.tmp`, destination);
+      // Folder/order edits are made through the shared storage controller.
+      // Preserve them when the live browser next saves its timeline.
+      let saved;
+      try { saved = this.readSessionFile(destination); } catch {}
+      for (const key of ['folderId', 'order']) if (saved && Object.hasOwn(saved, key)) this.session[key] = saved[key];
+      const contents = JSON.stringify(this.session);
+      if (contents === this.lastPersistedSession) return;
+      const savedAt = Date.now();
+      writeJson(destination, { ...this.session, savedAt }, (value) => value?.id === this.session.id && Array.isArray(value.tabs));
+      this.session.savedAt = savedAt;
+      this.lastPersistedSession = JSON.stringify(this.session);
     } catch (error) { this.emit('storage-error', error.message); }
+  }
+
+  readSessionFile(file) {
+    const id = path.basename(file, '.json');
+    return readJson(file, (value) => value?.id === id && Array.isArray(value.tabs));
   }
 
   readFreezer() {
     try {
-      const value = JSON.parse(fs.readFileSync(this.freezerFile, 'utf8'));
+      const value = readJson(this.freezerFile, (item) => Array.isArray(item?.entries) && Array.isArray(item.whitelist));
       return { entries: Array.isArray(value.entries) ? value.entries : [], whitelist: Array.isArray(value.whitelist) ? value.whitelist : [] };
     } catch { return { entries: [], whitelist: [] }; }
   }
 
   persistFreezer() {
     try {
-      fs.writeFileSync(`${this.freezerFile}.tmp`, JSON.stringify(this.freezer));
-      fs.renameSync(`${this.freezerFile}.tmp`, this.freezerFile);
+      writeJson(this.freezerFile, this.freezer, (item) => Array.isArray(item?.entries) && Array.isArray(item.whitelist));
     } catch (error) { this.emit('storage-error', error.message); }
   }
 
@@ -227,17 +242,17 @@ class BrowserController extends EventEmitter {
   isWhitelisted(url) { return this.freezer.whitelist.includes(url); }
 
   listSessions() {
-    return fs.readdirSync(path.join(this.dataDir, 'sessions')).filter((name) => name.endsWith('.json')).flatMap((name) => {
+    return jsonFiles(path.join(this.dataDir, 'sessions')).flatMap((name) => {
       try {
-        const session = JSON.parse(fs.readFileSync(path.join(this.dataDir, 'sessions', name), 'utf8'));
+        const session = this.readSessionFile(path.join(this.dataDir, 'sessions', name));
         return [{ id: session.id, name: session.name, startedAt: session.startedAt, endedAt: session.endedAt, browser: session.browser, tabCount: session.tabs.length, folderId: session.folderId || null, order: Number.isInteger(session.order) ? session.order : null }];
       } catch { return []; }
     }).sort((a, b) => a.folderId === b.folderId ? compareSavedSessions(a, b) : b.startedAt - a.startedAt);
   }
 
   foldersFile() { return path.join(this.dataDir, 'folders.json'); }
-  readFolders() { try { const items = JSON.parse(fs.readFileSync(this.foldersFile(), 'utf8')); return Array.isArray(items) ? items : []; } catch { return []; } }
-  writeFolders(folders) { const file = this.foldersFile(); fs.writeFileSync(`${file}.tmp`, JSON.stringify(folders)); fs.renameSync(`${file}.tmp`, file); }
+  readFolders() { try { return readJson(this.foldersFile(), Array.isArray); } catch { return []; } }
+  writeFolders(folders) { writeJson(this.foldersFile(), folders, Array.isArray); }
   listFolders() { return this.readFolders().sort((a, b) => a.createdAt - b.createdAt); }
   createFolder(name, parentId = null) {
     const trimmed = String(name || '').trim().slice(0, 60);
@@ -294,12 +309,11 @@ class BrowserController extends EventEmitter {
     }
     this.writeFolders(folders.filter((item) => !toDelete.has(item.id)));
     const dir = path.join(this.dataDir, 'sessions');
-    for (const name of fs.readdirSync(dir)) {
-      if (!name.endsWith('.json')) continue;
+    for (const name of jsonFiles(dir)) {
       const full = path.join(dir, name);
       try {
-        const session = JSON.parse(fs.readFileSync(full, 'utf8'));
-        if (session.folderId && toDelete.has(session.folderId)) { session.folderId = null; fs.writeFileSync(full, JSON.stringify(session)); }
+        const session = this.readSessionFile(full);
+        if (session.folderId && toDelete.has(session.folderId)) { session.folderId = null; writeJson(full, session); }
       } catch {}
     }
   }
@@ -307,21 +321,21 @@ class BrowserController extends EventEmitter {
     if (!/^[a-f0-9-]{36}$/.test(sessionId)) throw new Error('Invalid session ID');
     if (folderId && !/^[a-f0-9-]{36}$/.test(folderId)) throw new Error('Invalid folder ID');
     const full = path.join(this.dataDir, 'sessions', `${sessionId}.json`);
-    const session = JSON.parse(fs.readFileSync(full, 'utf8'));
+    const session = this.readSessionFile(full);
     const nextFolderId = folderId || null;
     if ((session.folderId || null) !== nextFolderId) session.order = null;
     session.folderId = nextFolderId;
-    fs.writeFileSync(full, JSON.stringify(session));
+    writeJson(full, session);
   }
 
   reorderSession(sessionId, targetSessionId, before) {
     if (!/^[a-f0-9-]{36}$/.test(sessionId) || !/^[a-f0-9-]{36}$/.test(targetSessionId)) throw new Error('Invalid session ID');
     if (sessionId === targetSessionId) return;
     const dir = path.join(this.dataDir, 'sessions');
-    const records = fs.readdirSync(dir).filter((name) => name.endsWith('.json')).flatMap((name) => {
+    const records = jsonFiles(dir).flatMap((name) => {
       try {
         const file = path.join(dir, name);
-        return [{ file, session: JSON.parse(fs.readFileSync(file, 'utf8')) }];
+        return [{ file, session: this.readSessionFile(file) }];
       } catch { return []; }
     });
     const source = records.find((record) => record.session.id === sessionId);
@@ -341,8 +355,7 @@ class BrowserController extends EventEmitter {
     }
     const changed = new Set(sourceFolderId === targetFolderId ? targetItems : [...targetItems, ...records.filter((record) => (record.session.folderId || null) === sourceFolderId && record.session.id !== sessionId)]);
     for (const record of changed) {
-      fs.writeFileSync(`${record.file}.tmp`, JSON.stringify(record.session));
-      fs.renameSync(`${record.file}.tmp`, record.file);
+      writeJson(record.file, record.session);
     }
   }
 
@@ -351,26 +364,33 @@ class BrowserController extends EventEmitter {
     const trimmed = String(name || '').trim().slice(0, 80);
     if (!trimmed) throw new Error('Enter a session name.');
     const full = path.join(this.dataDir, 'sessions', `${id}.json`);
-    const session = JSON.parse(fs.readFileSync(full, 'utf8'));
+    const session = this.readSessionFile(full);
     session.name = trimmed;
-    fs.writeFileSync(full, JSON.stringify(session));
+    writeJson(full, session);
   }
 
   deleteSession(id) {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid session ID');
-    fs.rmSync(path.join(this.dataDir, 'sessions', `${id}.json`), { force: true });
+    deleteJson(path.join(this.dataDir, 'sessions', `${id}.json`));
     fs.rmSync(path.join(this.dataDir, 'profiles', id), { recursive: true, force: true, maxRetries: 12, retryDelay: 250 });
   }
 
   loadSession(id) {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid session ID');
-    const session = JSON.parse(fs.readFileSync(path.join(this.dataDir, 'sessions', `${id}.json`), 'utf8'));
+    const session = this.readSessionFile(path.join(this.dataDir, 'sessions', `${id}.json`));
     session.activityHistory ||= [];
     session.tabs.forEach((tab) => { tab.windowHistory ||= []; tab.desktopId ||= 'unknown'; tab.windowId ||= null; tab.extensionTabId ??= null; tab.extensionWindowId ??= null; tab.tabIndex ??= null; tab.pinned ||= false; tab.active ||= false; tab.focused ||= false; tab.lastActiveAt ??= null; tab.inactiveScreenshotAt ??= null; tab.frozen ||= false; tab.frozenSlug ??= null; tab.originalUrl ??= null; tab.orderHistory ||= []; tab.groupId ??= null; tab.groupTitle ??= null; tab.groupColor ??= null; tab.groupCollapsed ||= false; tab.groupHistory ||= []; });
     // A session interrupted by an app/process crash has no explicit end time.
     if (!session.endedAt && session.id !== this.session?.id) {
-      session.endedAt = Math.max(session.startedAt, ...session.tabs.flatMap((tab) => [tab.openedAt, tab.closedAt || 0, tab.thumbnailAt || 0, ...tab.navigations.map((nav) => nav.at)]));
-      session.tabs.forEach((tab) => { tab.closedAt ||= session.endedAt; });
+      let endedAt = Math.max(session.startedAt, session.savedAt || 0);
+      for (const activity of session.activityHistory) endedAt = Math.max(endedAt, activity.at);
+      for (const tab of session.tabs) {
+        endedAt = Math.max(endedAt, tab.openedAt, tab.closedAt || 0, tab.thumbnailAt || 0, tab.lastActiveAt || 0);
+        for (const entry of [...(tab.navigations || []), ...tab.windowHistory, ...tab.groupHistory, ...tab.orderHistory]) endedAt = Math.max(endedAt, entry.at);
+      }
+      session.endedAt = endedAt;
+      session.recovered = true;
+      session.tabs.forEach((tab) => { tab.openAtEnd ??= !tab.closedAt; tab.closedAt ||= endedAt; });
     }
     return session;
   }

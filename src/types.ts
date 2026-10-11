@@ -39,6 +39,8 @@ export interface Session {
   browser: 'helium' | 'chrome';
   startedAt: number;
   endedAt: number | null;
+  savedAt?: number;
+  recovered?: boolean;
   restoredFromSessionId?: string;
   browserDataDir?: string;
   profileSourceSessionId?: string | null;
