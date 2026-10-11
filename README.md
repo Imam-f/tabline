@@ -4,7 +4,7 @@ A local-first Electron app that turns your Helium or Chrome browsing session int
 
 See [GitHub Releases](https://github.com/Imam-f/tabline/releases) for downloads and the changelog.
 
-The current release, **0.1.7**, adds a second-by-second active-tab timeline, full-resolution tab screenshots, and a browser launch that avoids Chrome's automation banner. Activity history is saved with each session and included in JSON exports.
+The current release, **0.1.8**, adds crash recovery for saved progress, optional monitoring of multiple Tabline machines, and saved-session resume on a client machine. Helium and Chrome now remember their executable paths independently when switching browsers. Network sharing is off by default.
 
 ## Screenshots
 
@@ -26,6 +26,8 @@ npm run dev
 ```
 
 Click **New session**, choose a browser, and launch it. Common installation locations are detected automatically. For a portable installation, AppImage, or a browser installed elsewhere, expand **Browser executable** and select or paste the executable path. On macOS, use the binary inside the application bundle, for example `/Applications/Helium.app/Contents/MacOS/Helium`.
+
+Tabline remembers a separate executable path for Helium and Chrome. Switching browsers retains each browser's path, and paths saved by earlier versions are migrated automatically.
 
 To run the built app:
 
@@ -58,6 +60,7 @@ Installers are placed in `release/`. `npm run dist:dir` creates an unpacked desk
 - **Concurrent sessions** — track multiple browser sessions at once and switch between them from the session tabs or sidebar. Every session has an isolated browser data directory cloned from the previous session; restoring a saved session automatically duplicates its profile and timeline into a new live session.
 - **Network instances** — monitor several Tabline machines simultaneously, with automatically updating remote timelines and reconnection. Client mode waits for another instance to request a saved-session restore on the client machine.
 - **Saved sessions** — automatically persist timelines, navigation history, and thumbnails locally. Click a saved session to select it, double-click to open it, or drag it to reorder. Organize sessions into folders, rename or delete them, and export an opened session as portable JSON. Deleting a session also deletes its browser data directory.
+- **Crash recovery** — save changes to disk before displaying updates, with atomic replacement and a backup of the previous save. After an interruption, open **Saved sessions** to recover the timeline and restore its open tabs. Folder organization and freezer data also recover from complete pending saves or backups.
 - **Demo mode** — explore an example timeline without launching a browser. The standalone web preview (`npm run dev:web`) uses the demo; browser launching requires Electron.
 
 ## Long-term goals
@@ -135,7 +138,7 @@ Session changes are saved and flushed to disk before the app displays the update
 ## Development & checks
 
 ```sh
-npm test             # CDP transport, target lifecycle, URL validation
+npm test             # tracking, crash recovery, URL validation, network instances
 npm run build        # TypeScript check and production renderer build
 npm run test:browser # real-browser integration check using local fixture pages
 npm run test:desktop # production Electron UI and preload end-to-end check
@@ -152,6 +155,7 @@ electron/
   session-manager.cjs     Concurrent browser-session routing and active-session state
   network.cjs             Authenticated instance monitoring and client restore listener
   browser.cjs             Browser launch, tracking, capture, persistence, restore, freezer
+  storage.cjs             Flushed atomic JSON writes, backups, and recovery
   cdp.cjs                 DevTools WebSocket client
   virtual-desktop.cjs     Windows virtual-desktop helper process bridge
   virtual-desktop.ps1     Native Windows desktop lookup and window placement
@@ -164,7 +168,7 @@ electron/
 src/
   main.tsx                React renderer entry point
   App.tsx                 Timeline, tab details, launcher, saved sessions
-  NetworkPanel.tsx         Network settings, connected machines, remote resume controls
+  NetworkPanel.tsx        Network settings, connected machines, remote resume controls
   types.ts                Session, tab, and preload API types
   demo.ts                 Clearly labeled interactive demo data
   styles.css              Responsive desktop interface
@@ -176,6 +180,7 @@ scripts/
 tests/
   browser.test.cjs        Automated browser-controller and CDP tests
   network.test.cjs        Multi-instance monitoring, authentication, reconnect, remote restore
+  storage.test.cjs        Forced termination, interrupted saves, backups, and recovery
 docs/                    README screenshots
 public/                  Static renderer assets
 index.html               Renderer HTML entry point
