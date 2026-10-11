@@ -4,12 +4,17 @@ const fs = require('node:fs/promises');
 const { detectBrowsers } = require('./browser.cjs');
 const { SessionManager } = require('./session-manager.cjs');
 const { VirtualDesktopResolver } = require('./virtual-desktop.cjs');
+const { NetworkManager } = require('./network.cjs');
 
 let window;
 let manager;
 let quitting = false;
 let virtualDesktopResolver;
+let network;
 const isDev = process.env.TABLINE_DEV === '1';
+
+// Separate data directories allow independent instances on the same machine.
+if (process.env.TABLINE_DATA_DIR) app.setPath('userData', path.resolve(process.env.TABLINE_DATA_DIR));
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
@@ -25,6 +30,12 @@ else {
       controller.desktopMover = (windowId, bounds, processId, desktopId) => virtualDesktopResolver.move(windowId, processId, bounds, desktopId);
     });
     manager.on('change', (state) => { if (window && !window.isDestroyed()) window.webContents.send('state:changed', state); });
+    network = new NetworkManager(manager, path.join(app.getPath('userData'), 'browser-data'));
+    network.on('change', (state) => { if (window && !window.isDestroyed()) window.webContents.send('network:changed', state); });
+    void network.start();
+    ipcMain.handle('network:get', () => network.snapshot());
+    ipcMain.handle('network:configure', (_event, options) => network.configure(options));
+    ipcMain.handle('network:restore', (_event, peerId, sessionId, at) => network.restorePeer(peerId, sessionId, at));
     ipcMain.handle('state:get', () => manager.snapshot());
     ipcMain.handle('browsers:list', () => detectBrowsers());
     ipcMain.handle('browser:choose', async () => {
@@ -73,6 +84,7 @@ else {
   });
 
   app.on('before-quit', (event) => {
+    network?.stop();
     if (!quitting && manager?.hasRunningSessions()) {
       event.preventDefault();
       quitting = true;
@@ -80,7 +92,7 @@ else {
     }
   });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-  app.on('will-quit', () => virtualDesktopResolver?.dispose());
+  app.on('will-quit', () => { network?.stop(); virtualDesktopResolver?.dispose(); });
 }
 
 function createWindow() {

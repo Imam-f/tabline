@@ -3,8 +3,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const http = require('node:http');
+const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { CDP } = require('../electron/cdp.cjs');
+const { NetworkManager } = require('../electron/network.cjs');
 const electron = require('electron');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -15,6 +17,13 @@ async function waitFor(predicate, label, timeout = 25000) {
     await delay(150);
   }
   throw new Error(`Timed out: ${label}`);
+}
+async function freePort() {
+  const probe = net.createServer();
+  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const port = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
+  return port;
 }
 
 (async () => {
@@ -34,6 +43,7 @@ async function waitFor(predicate, label, timeout = 25000) {
   let client;
   let sessionId;
   let evaluate;
+  let peerNetwork;
   try {
     const endpoint = await waitFor(() => output.match(/DevTools listening on (ws:\/\/[^\s]+)/)?.[1], 'Electron debug endpoint', 40000);
     client = new CDP(endpoint);
@@ -78,12 +88,49 @@ async function waitFor(predicate, label, timeout = 25000) {
     if (process.platform === 'win32') assert.equal(await evaluate(`document.querySelector('.toast')?.innerText.includes('virtual desktop placement was unavailable')`), false, 'restored window should return to its saved virtual desktop');
     await evaluate(`window.tabline.stop()`);
     await waitFor(() => evaluate(`!document.querySelector('.live-badge')`), 'restored session stopped');
+    // Client mode must wait, then restore its own saved data on an authenticated request.
+    const networkPort = await freePort();
+    const savedSessionId = await evaluate(`window.tabline.listSessions().then(sessions => sessions[0].id)`);
+    const networkConfig = await evaluate(`window.tabline.getNetwork().then(state => state.config)`);
+    await evaluate(`window.tabline.configureNetwork(${JSON.stringify({ ...networkConfig, mode: 'client', port: networkPort })})`);
+    await evaluate(`[...document.querySelectorAll('.nav-item')].find(e=>e.innerText.includes('Network instances')).click()`);
+    await waitFor(() => evaluate(`document.querySelector('.network-status')?.innerText.includes('waiting for a restore request')`), 'client waiting status in network UI');
+    assert.equal(await evaluate(`window.tabline.getState().then(state => state.sessions.filter(s=>s.status==='live').length)`), 0, 'client mode should not launch a browser until requested');
+    const restoreResponse = await fetch(`http://127.0.0.1:${networkPort}/v1/restore`, { method: 'POST', headers: { Authorization: `Bearer ${networkConfig.token}` }, body: JSON.stringify({ sessionId: savedSessionId }) });
+    assert.equal(restoreResponse.status, 200);
+    assert.equal((await restoreResponse.json()).opened, 1);
+    assert.equal(await evaluate(`window.tabline.getState().then(state => state.session.restoredFromSessionId)`), savedSessionId);
+    assert.equal(await evaluate(`window.tabline.getState().then(state => state.status)`), 'live');
+    await evaluate(`window.tabline.stop()`);
+    // A second instance's timeline should update without enabling local browser controls.
+    const remoteSession = await evaluate(`window.tabline.loadSession(${JSON.stringify(savedSessionId)})`);
+    remoteSession.name = 'Remote fixture session';
+    remoteSession.endedAt = null;
+    remoteSession.tabs.forEach((tab) => { tab.closedAt = null; });
+    const remoteState = { status: 'live', session: remoteSession, sessions: [{ status: 'live', session: remoteSession, debugPort: null }], debugPort: null, activeSessionId: remoteSession.id, error: null };
+    peerNetwork = new NetworkManager({ snapshot: () => remoteState, listSessions: () => [] }, path.join(dataDir, 'peer-network'));
+    const peerPort = await freePort();
+    await peerNetwork.configure({ ...peerNetwork.config, mode: 'host', name: 'Remote test machine', port: peerPort });
+    await evaluate(`window.tabline.configureNetwork(${JSON.stringify({ ...networkConfig, mode: 'client', port: networkPort, peers: [{ id: 'smoke-peer', url: `http://127.0.0.1:${peerPort}`, token: peerNetwork.config.token }] })})`);
+    await waitFor(() => evaluate(`document.querySelector('.network-instance h3')?.innerText === 'Remote test machine'`), 'connected instance in network UI');
+    await evaluate(`document.querySelector('.network-session button').click()`);
+    await waitFor(() => evaluate(`document.querySelector('.session-title .badge')?.innerText === 'REMOTE LIVE'`), 'remote timeline selected');
+    assert.equal(await evaluate(`!!document.querySelector('.stop-button') || !!document.querySelector('.restore-session-inline')`), false, 'remote timelines must not control a local session');
+    remoteSession.tabs[0].title = 'Live change from another machine';
+    await waitFor(() => evaluate(`document.querySelector('.tab-bar')?.title.includes('Live change from another machine')`), 'remote timeline updates automatically');
+    peerNetwork.stop();
+    await waitFor(() => evaluate(`document.querySelector('.session-title .badge')?.innerText === 'OFFLINE'`), 'remote timeline marked offline');
+    assert.equal(await evaluate(`document.querySelector('.tab-bar')?.title.includes('Live change from another machine')`), true, 'last remote snapshot should remain visible offline');
+    await evaluate(`document.querySelector('[aria-label="Return to current session"]').click()`);
+    assert.equal(await evaluate(`!!document.querySelector('.network-view-banner')`), false);
+    await evaluate(`window.tabline.configureNetwork(${JSON.stringify({ ...networkConfig, mode: 'off', port: networkPort })})`);
     assert.deepEqual(rendererErrors, [], 'production renderer should have no uncaught errors');
-    console.log('PASS: production Electron window, sandboxed preload, browser launch through UI, live timeline, thumbnail, stop, save, reopen, and restore.');
+    console.log('PASS: production Electron UI, live tracking, save and restore, client waiting and network resume, remote timeline updates, and offline state.');
   } finally {
     if (evaluate) await evaluate(`window.tabline.stop()`).catch(() => {});
     client?.close();
     child.kill();
+    peerNetwork?.stop();
     await new Promise((resolve) => server.close(resolve));
     await delay(1000);
     try { fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 }); } catch { console.log(`Temporary desktop profile remains at ${dataDir}`); }

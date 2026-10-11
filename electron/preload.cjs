@@ -2,6 +2,14 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('tabline', {
   getState: () => ipcRenderer.invoke('state:get'),
+  getNetwork: () => ipcRenderer.invoke('network:get'),
+  configureNetwork: (options) => ipcRenderer.invoke('network:configure', options),
+  restorePeerSession: (peerId, sessionId, at) => ipcRenderer.invoke('network:restore', peerId, sessionId, at),
+  onNetwork: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('network:changed', listener);
+    return () => ipcRenderer.removeListener('network:changed', listener);
+  },
   getBrowsers: () => ipcRenderer.invoke('browsers:list'),
   chooseExecutable: () => ipcRenderer.invoke('browser:choose'),
   launch: (options) => ipcRenderer.invoke('browser:launch', options),

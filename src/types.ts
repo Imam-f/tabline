@@ -65,7 +65,36 @@ export interface LaunchOptions { browser: 'helium' | 'chrome'; executable?: stri
 export interface SessionSummary { id: string; name: string; startedAt: number; endedAt: number | null; browser: string; tabCount: number; folderId: string | null; order: number | null }
 export interface Folder { id: string; name: string; createdAt: number; parentId: string | null }
 export interface RestoreResult { state: AppState; requested: number; opened: number; skipped: number; failed: number; desktopFailed: number; groupsRestored: boolean; warnings: string[] }
+export interface NetworkConfig {
+  mode: 'off' | 'host' | 'client';
+  name: string;
+  port: number;
+  token: string;
+  peers: Array<{ id: string; url: string; token: string }>;
+}
+export interface NetworkPeer {
+  id: string;
+  url: string;
+  connected: boolean;
+  error: string | null;
+  lastSeen?: number | null;
+  data: { instanceId: string; name: string; mode: NetworkConfig['mode']; restoring: boolean; state: AppState; savedSessions: SessionSummary[] } | null;
+}
+export interface NetworkState {
+  config: NetworkConfig;
+  instanceId: string;
+  listening: boolean;
+  port: number | null;
+  addresses: string[];
+  error: string | null;
+  restoring: boolean;
+  peers: NetworkPeer[];
+}
 export interface TablineAPI {
+  getNetwork(): Promise<NetworkState>;
+  configureNetwork(options: NetworkConfig): Promise<NetworkState>;
+  restorePeerSession(peerId: string, sessionId: string, at?: number): Promise<{ opened: number; skipped: number; failed: number; warnings: string[] }>;
+  onNetwork(callback: (state: NetworkState) => void): () => void;
   getState(): Promise<AppState>;
   getBrowsers(): Promise<BrowserChoice[]>;
   chooseExecutable(): Promise<string | null>;
