@@ -108,6 +108,8 @@ Data lives inside Electron’s platform-specific `userData` directory:
 
 The `sessions/` folder contains JSON sessions (including base64 JPEG thumbnails). `freezer.json` contains persistent local short-URL mappings, whitelist entries, and frozen screenshots. The `profiles/` folder contains one UUID-named browser data directory per session. Deleting a session removes both its JSON and profile directory. URLs and visible page content can be present in session exports and freezer data.
 
+Session changes are saved and flushed to disk before the app displays the update, including during continuous browsing. Writes replace JSON files atomically and retain the previous version in a `.bak` file. After an app or browser crash, reopen Tabline and go to **Saved sessions** to view the recovered timeline or click **Restore** to reopen its tabs. Loading automatically recovers complete pending `.tmp` files or backups if a save was interrupted or the main file is damaged. Recovery preserves navigation and activity history, thumbnails, groups, and the tabs that were open at the last save. Folder organization and freezer data use the same protected storage. Pages themselves, including unsaved text inside websites, remain subject to the browser's own recovery behavior. Disk failures can still prevent saving; Tabline reports save errors in the app.
+
 ## Development & checks
 
 ```sh
