@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, ArrowUpFromLine, Check, ChevronDown,
+  Activity, ArrowDownToLine, ArrowLeftRight, ArrowRight, ArrowUpDown, ArrowUpRight, ArrowUpFromLine, Check, ChevronDown,
   ChevronLeft, ChevronRight, CircleHelp, Clock3, ExternalLink, FolderClock, FolderOpen,
   FolderPlus, GitBranch, Globe2, Image, Layers3, LayoutList, Maximize2, Monitor,
   Pencil, Plus, Radio, RefreshCw, Search, Settings2, ShieldCheck, Snowflake, Sparkles, Square, Trash2, X, Minus,
@@ -64,6 +64,7 @@ export default function App() {
   const [showThumbnails, setShowThumbnails] = useState(true);
   const [showConnections, setShowConnections] = useState(true);
   const [zoom, setZoom] = useState(1);
+  const [verticalZoom, setVerticalZoom] = useState(1);
   const [timelineTime, setTimelineTime] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState<string | null>(null);
@@ -434,8 +435,8 @@ export default function App() {
             <div className="timeline-toolbar"><div className="view-switch"><button className={view === 'timeline' ? 'selected' : ''} onClick={() => setView('timeline')}><Activity size={15}/>Timeline</button><button className={view === 'list' ? 'selected' : ''} onClick={() => setView('list')}><LayoutList size={15}/>Tab list</button></div><div className="toolbar-filters"><label className="search-field"><Search size={15}/><input ref={searchRef} aria-label="Search tabs" placeholder="Find a tab..." value={query} onChange={(event) => setQuery(event.target.value)}/>{query ? <button aria-label="Clear search" onClick={() => setQuery('')}><X size={12}/></button> : <kbd>⌘ K</kbd>}</label><div className="select-wrap"><select aria-label="Filter tabs" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="all">All tabs</option><option value="open">Open tabs</option><option value="closed">Closed tabs</option><option value="linked">Connected tabs</option></select><ChevronDown size={13}/></div></div></div>
             <div className={`timeline-content ${selected ? 'has-detail' : ''}`}>
               <div className="timeline-main">
-                  {remote && (!session || !session.tabs.length) ? <div className="empty-state"><Globe2 size={30}/><h3>No remote tabs to display.</h3><p>This timeline may have been closed on the other machine.</p><button className="button secondary" onClick={() => setPage('network')}>Network instances</button></div> : !session || !session.tabs.length ? <div className="empty-state launch-empty"><div className="empty-illustration"><span/><span/><span/><GitBranch size={30}/></div><span className="eyebrow">FOLLOW YOUR CURIOSITY</span><h3>Big ideas start with a new tab.</h3><p>Launch Helium or Chrome and watch your browsing<br/>journey come together, one connection at a time.</p><button className="button primary" onClick={() => setShowLaunch(true)}><Plus size={16}/>Launch a browser</button><button className="text-button" onClick={exploreDemo}>Or take a look around with a demo <ArrowRight size={14}/></button></div> : !filtered.length ? <div className="empty-state"><Search size={30}/><h3>No tabs on this trail.</h3><p>Try a different search or show all tabs.</p><button className="button secondary" onClick={() => { setQuery(''); setFilter('all'); }}>Clear filters</button></div> : view === 'timeline' ? <Timeline tabs={filtered} allTabs={session.tabs} session={session} now={sessionNow} time={restoreTime} onTimeChange={setTimelineTime} selectedId={selectedId} onSelect={setSelectedId} onFocus={focusTab} thumbnails={showThumbnails} connections={showConnections} zoom={zoom} activeTabIds={activeTabIds} focusedWindowId={activity?.focusedWindowId ?? null}/> : <TabList tabs={tabsAtTimelineTime} now={restoreTime} selectedId={selectedId} currentTabId={currentTab?.id || null} activeTabIds={activeTabIds} focusedWindowId={activity?.focusedWindowId ?? null} onSelect={setSelectedId} onFocus={focusTab}/>}
-                <div className="timeline-footer"><div className="legend"><span><i className="legend-line open"/>Open tab</span><span><i className="legend-line closed"/>Closed tab</span><button className={!showConnections ? 'muted' : ''} onClick={() => setShowConnections(!showConnections)} title="Toggle opener connections"><GitBranch size={13}/>Opened from</button></div><div className="zoom-controls"><button className={!showThumbnails ? 'muted' : ''} onClick={() => setShowThumbnails(!showThumbnails)} title="Toggle thumbnails" aria-label="Toggle thumbnails" aria-pressed={showThumbnails}><Image size={15}/></button><span className="control-divider"/><button onClick={() => setZoom(Math.max(1, zoom - 0.5))} disabled={zoom === 1} aria-label="Zoom out"><Minus size={14}/></button><span>{Math.round(zoom * 100)}%</span><button onClick={() => setZoom(Math.min(4, zoom + 0.5))} disabled={zoom === 4} aria-label="Zoom in"><Plus size={14}/></button><button onClick={() => setZoom(1)} aria-label="Fit timeline" title="Fit timeline"><Maximize2 size={13}/></button></div></div>
+                  {remote && (!session || !session.tabs.length) ? <div className="empty-state"><Globe2 size={30}/><h3>No remote tabs to display.</h3><p>This timeline may have been closed on the other machine.</p><button className="button secondary" onClick={() => setPage('network')}>Network instances</button></div> : !session || !session.tabs.length ? <div className="empty-state launch-empty"><div className="empty-illustration"><span/><span/><span/><GitBranch size={30}/></div><span className="eyebrow">FOLLOW YOUR CURIOSITY</span><h3>Big ideas start with a new tab.</h3><p>Launch Helium or Chrome and watch your browsing<br/>journey come together, one connection at a time.</p><button className="button primary" onClick={() => setShowLaunch(true)}><Plus size={16}/>Launch a browser</button><button className="text-button" onClick={exploreDemo}>Or take a look around with a demo <ArrowRight size={14}/></button></div> : !filtered.length ? <div className="empty-state"><Search size={30}/><h3>No tabs on this trail.</h3><p>Try a different search or show all tabs.</p><button className="button secondary" onClick={() => { setQuery(''); setFilter('all'); }}>Clear filters</button></div> : view === 'timeline' ? <Timeline tabs={filtered} allTabs={session.tabs} session={session} now={sessionNow} time={restoreTime} onTimeChange={setTimelineTime} selectedId={selectedId} onSelect={setSelectedId} onFocus={focusTab} thumbnails={showThumbnails} connections={showConnections} zoom={zoom} verticalZoom={verticalZoom} activeTabIds={activeTabIds} focusedWindowId={activity?.focusedWindowId ?? null}/> : <TabList tabs={tabsAtTimelineTime} now={restoreTime} selectedId={selectedId} currentTabId={currentTab?.id || null} activeTabIds={activeTabIds} focusedWindowId={activity?.focusedWindowId ?? null} onSelect={setSelectedId} onFocus={focusTab}/>}
+                <div className="timeline-footer"><div className="legend"><span><i className="legend-line open"/>Open tab</span><span><i className="legend-line closed"/>Closed tab</span><button className={!showConnections ? 'muted' : ''} onClick={() => setShowConnections(!showConnections)} title="Toggle opener connections"><GitBranch size={13}/>Opened from</button></div><div className="zoom-controls"><button className={!showThumbnails ? 'muted' : ''} onClick={() => setShowThumbnails(!showThumbnails)} title="Toggle thumbnails" aria-label="Toggle thumbnails" aria-pressed={showThumbnails}><Image size={15}/></button>{view === 'timeline' && <><span className="control-divider"/><TimelineZoomControl axis="horizontal" zoom={zoom} min={0.25} max={4} onChange={setZoom}/><span className="control-divider"/><TimelineZoomControl axis="vertical" zoom={verticalZoom} min={0.5} max={2} onChange={setVerticalZoom}/><button onClick={() => { setZoom(1); setVerticalZoom(1); }} aria-label="Reset timeline zoom" title="Reset both axes to 100%"><Maximize2 size={13}/></button></>}</div></div>
               </div>
               {selected && session && <TabDetail tab={selected} session={session} now={sessionNow} onClose={() => setSelectedId(null)} onSelect={setSelectedId} isLive={isLive} onFocus={() => action(() => api!.focusTab(selected.id))} onCapture={() => action(async () => { const image = await api!.capture(selected.id); if (!image) throw new Error('This tab is no longer available for capture.'); }, 'Thumbnail refreshed.')} onFreeze={() => action(async () => { const result = await api!.freezeTab(selected.id); if (!result.shortUrl) throw new Error('This tab could not be frozen.'); }, 'Tab frozen into a local snapshot.')} onUnfreeze={() => action(async () => { const result = await api!.unfreezeTab(selected.id); if (!result.originalUrl) throw new Error('This tab could not be returned.'); }, 'Returned to the original page.')} onCloseTab={() => action(() => api!.closeTab(selected.id), 'Tab closed. Its place in your timeline is saved.')}/>}
             </div>
@@ -514,17 +515,26 @@ function SessionRow({ item, options, onMove, onView, onRestore, disabled, rename
   return <div className={`saved-session ${selected ? 'selected' : ''} ${dragging ? 'dragging' : ''} ${dropPosition ? `drop-${dropPosition}` : ''} ${editing ? 'editing' : ''}`} style={{ paddingLeft: indent }} onDragOver={onDragOver} onDrop={onDrop}>{editing ? <div className="session-rename"><input autoFocus aria-label="Rename session" value={sessionName} onChange={(event) => onSessionNameChange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') onRenameSave(); if (event.key === 'Escape') onRenameCancel(); }}/><button onClick={onRenameSave} aria-label="Save session name"><Check size={14}/></button><button onClick={onRenameCancel} aria-label="Cancel"><X size={14}/></button></div> : <><button className="saved-session-view" draggable onClick={onSelect} onDoubleClick={onView} onDragStart={onDragStart} onDragEnd={onDragEnd} title="Click to select, double-click to open"><span className="saved-session-icon"><FolderClock size={22}/></span><div><strong>{item.name}</strong><span>{date(item.startedAt)} · {clock(item.startedAt)} · {item.browser === 'helium' ? 'Helium' : 'Chrome'}</span></div><span>{item.tabCount} tabs</span><ArrowRight size={18}/></button><label className="saved-session-folder" title="Move to folder"><FolderOpen size={13}/><span className="select-wrap"><select aria-label={`Move ${item.name} to folder`} value={item.folderId || ''} onChange={(event) => onMove(item.id, event.target.value || null)}><option value="">Unfiled</option>{options.map(({ folder, depth: optionDepth }) => <option key={folder.id} value={folder.id}>{'\u00A0'.repeat(optionDepth * 2)}{folder.name}</option>)}</select><ChevronDown size={13}/></span></label><div className="saved-session-actions"><button disabled={renameDisabled} onClick={onRenameStart} aria-label={`Rename ${item.name}`} title="Rename session"><Pencil size={13}/></button><button onClick={onDelete} aria-label={`Delete ${item.name}`} title="Delete session"><Trash2 size={13}/></button></div><button className="button secondary restore-session" disabled={disabled} onClick={onRestore}><RefreshCw size={14}/>Restore</button></>}</div>;
 }
 
-function Timeline({ tabs, allTabs, session, now, time, onTimeChange, selectedId, onSelect, onFocus, thumbnails, connections, zoom, activeTabIds, focusedWindowId }: { tabs: BrowserTab[]; allTabs: BrowserTab[]; session: Session; now: number; time: number; onTimeChange: (time: number) => void; selectedId: string | null; onSelect: (id: string) => void; onFocus: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number; activeTabIds: Set<string>; focusedWindowId: string | null }) {
+function TimelineZoomControl({ axis, zoom, min, max, onChange }: { axis: 'horizontal' | 'vertical'; zoom: number; min: number; max: number; onChange: (zoom: number) => void }) {
+  return <div className="axis-zoom-control" role="group" aria-label={`${axis} timeline zoom`}>
+    <span className="axis-zoom-label" title={axis === 'horizontal' ? 'Horizontal time scale' : 'Vertical lane height'}>{axis === 'horizontal' ? <ArrowLeftRight size={13}/> : <ArrowUpDown size={13}/>}<span>{axis === 'horizontal' ? 'Time' : 'Lanes'}</span></span>
+    <button onClick={() => onChange(Math.max(min, zoom - 0.25))} disabled={zoom <= min} aria-label={`Zoom out ${axis}`} title={`Zoom out ${axis}`}><Minus size={13}/></button>
+    <output aria-label={`${axis} zoom level`}>{Math.round(zoom * 100)}%</output>
+    <button onClick={() => onChange(Math.min(max, zoom + 0.25))} disabled={zoom >= max} aria-label={`Zoom in ${axis}`} title={`Zoom in ${axis}`}><Plus size={13}/></button>
+  </div>;
+}
+
+function Timeline({ tabs, allTabs, session, now, time, onTimeChange, selectedId, onSelect, onFocus, thumbnails, connections, zoom, verticalZoom, activeTabIds, focusedWindowId }: { tabs: BrowserTab[]; allTabs: BrowserTab[]; session: Session; now: number; time: number; onTimeChange: (time: number) => void; selectedId: string | null; onSelect: (id: string) => void; onFocus: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number; verticalZoom: number; activeTabIds: Set<string>; focusedWindowId: string | null }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const toggle = (key: string) => setCollapsed((prev) => {
     const next = new Set(prev);
     if (next.has(key)) next.delete(key); else next.add(key);
     return next;
   });
-  return <TimelineCanvas groups={groupTabsByDesktop(tabs)} allTabs={allTabs} session={session} now={now} time={time} onTimeChange={onTimeChange} selectedId={selectedId} onSelect={onSelect} onFocus={onFocus} thumbnails={thumbnails} connections={connections} zoom={zoom} activeTabIds={activeTabIds} focusedWindowId={focusedWindowId} collapsed={collapsed} onToggle={toggle}/>;
+  return <TimelineCanvas groups={groupTabsByDesktop(tabs)} allTabs={allTabs} session={session} now={now} time={time} onTimeChange={onTimeChange} selectedId={selectedId} onSelect={onSelect} onFocus={onFocus} thumbnails={thumbnails} connections={connections} zoom={zoom} verticalZoom={verticalZoom} activeTabIds={activeTabIds} focusedWindowId={focusedWindowId} collapsed={collapsed} onToggle={toggle}/>;
 }
 
-function TimelineCanvas({ groups, allTabs, session, now, time, onTimeChange, selectedId, onSelect, onFocus, thumbnails, connections, zoom, activeTabIds, focusedWindowId, collapsed, onToggle }: { groups: DesktopTabGroup[]; allTabs: BrowserTab[]; session: Session; now: number; time: number; onTimeChange: (time: number) => void; selectedId: string | null; onSelect: (id: string) => void; onFocus: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number; activeTabIds: Set<string>; focusedWindowId: string | null; collapsed: Set<string>; onToggle: (key: string) => void }) {
+function TimelineCanvas({ groups, allTabs, session, now, time, onTimeChange, selectedId, onSelect, onFocus, thumbnails, connections, zoom, verticalZoom, activeTabIds, focusedWindowId, collapsed, onToggle }: { groups: DesktopTabGroup[]; allTabs: BrowserTab[]; session: Session; now: number; time: number; onTimeChange: (time: number) => void; selectedId: string | null; onSelect: (id: string) => void; onFocus: (id: string) => void; thumbnails: boolean; connections: boolean; zoom: number; verticalZoom: number; activeTabIds: Set<string>; focusedWindowId: string | null; collapsed: Set<string>; onToggle: (key: string) => void }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const [draggingTime, setDraggingTime] = useState(false);
@@ -535,9 +545,10 @@ function TimelineCanvas({ groups, allTabs, session, now, time, onTimeChange, sel
     if (viewportRef.current) observer.observe(viewportRef.current);
     return () => observer.disconnect();
   }, []);
-  const width = Math.max(containerWidth, 540) * zoom;
   const padding = 42;
-  const plotWidth = width - padding - 30;
+  const plotWidth = Math.max(120, (containerWidth - padding - 30) * zoom);
+  const width = padding + plotWidth + 30;
+  const tickIntervals = Math.max(1, Math.floor(plotWidth / 100));
   const span = Math.max(60000, now - session.startedAt) * 1.075;
   const x = (time: number) => padding + Math.max(0, (time - session.startedAt) / span) * plotWidth;
   const nowX = x(time);
@@ -559,10 +570,11 @@ function TimelineCanvas({ groups, allTabs, session, now, time, onTimeChange, sel
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     setDraggingTime(false);
   };
-  const rowHeight = 60;
+  const rowHeight = 60 * verticalZoom;
+  const barHeight = Math.max(22, rowHeight - 11);
   const headerHeight = 35;
-  const activityRowHeight = 58;
-  const headingHeight = 34;
+  const activityRowHeight = Math.max(48, 58 * verticalZoom);
+  const headingHeight = Math.max(24, 34 * verticalZoom);
   const activityHistory = session.activityHistory || [];
   const activityTime = activityHoverTime ?? time;
   const activity = activityHistory.filter((entry) => entry.at <= activityTime).at(-1) || null;
@@ -596,16 +608,26 @@ function TimelineCanvas({ groups, allTabs, session, now, time, onTimeChange, sel
       }
     }
   }
-  const contentHeight = Math.max(460, cursor + 34);
+  const contentHeight = cursor + 34;
+  const previousScale = useRef({ zoom, verticalZoom, plotWidth, contentHeight });
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    const previous = previousScale.current;
+    if (viewport) {
+      if (previous.zoom !== zoom) viewport.scrollLeft = Math.max(0, padding + (viewport.scrollLeft + viewport.clientWidth / 2 - padding) * plotWidth / previous.plotWidth - viewport.clientWidth / 2);
+      if (previous.verticalZoom !== verticalZoom) viewport.scrollTop = Math.max(0, (viewport.scrollTop + viewport.clientHeight / 2) * contentHeight / previous.contentHeight - viewport.clientHeight / 2);
+    }
+    previousScale.current = { zoom, verticalZoom, plotWidth, contentHeight };
+  }, [zoom, verticalZoom, plotWidth, contentHeight]);
 
   const renderTab = (tab: BrowserTab) => {
     const left = x(tab.openedAt);
     const barWidth = Math.max(8, x(tab.closedAt || now) - left);
-    const showImage = thumbnails && barWidth > 160;
+    const showImage = thumbnails && barWidth > 160 && verticalZoom >= 1;
     const number = allTabs.findIndex((item) => item.id === tab.id) + 1;
     return <div className={`timeline-row ${selectedId === tab.id ? 'selected' : ''} ${activeTabIds.has(tab.id) ? 'active-tab' : ''}`} key={tab.id} style={{ height: rowHeight }}>
       <span className="row-number">{String(number).padStart(2, '0')}</span>
-      <button title={`${tab.title}\n${tab.originalUrl || tab.url}\nOpened ${clock(tab.openedAt)}${tab.closedAt ? ` · Closed ${clock(tab.closedAt)}` : ' · Still open'}${tab.frozen ? '\nFrozen snapshot' : ''}${tab.groupTitle ? `\nGroup: ${tab.groupTitle}` : ''}`} aria-label={`View ${tab.title}`} className={`tab-bar ${siteColor(tab)} ${tab.closedAt ? 'is-closed' : ''} ${tab.frozen ? 'is-frozen' : ''} ${selectedId === tab.id ? 'is-selected' : ''} ${activeTabIds.has(tab.id) ? 'is-active-at-time' : ''} ${barWidth < 120 ? 'compact' : ''}`} style={{ left, width: barWidth }} onClick={() => onSelect(tab.id)} onDoubleClick={() => { if (!tab.closedAt) onFocus(tab.id); }}>
+      <button title={`${tab.title}\n${tab.originalUrl || tab.url}\nOpened ${clock(tab.openedAt)}${tab.closedAt ? ` · Closed ${clock(tab.closedAt)}` : ' · Still open'}${tab.frozen ? '\nFrozen snapshot' : ''}${tab.groupTitle ? `\nGroup: ${tab.groupTitle}` : ''}`} aria-label={`View ${tab.title}`} className={`tab-bar ${siteColor(tab)} ${tab.closedAt ? 'is-closed' : ''} ${tab.frozen ? 'is-frozen' : ''} ${selectedId === tab.id ? 'is-selected' : ''} ${activeTabIds.has(tab.id) ? 'is-active-at-time' : ''} ${barWidth < 120 ? 'compact' : ''}`} style={{ left, width: barWidth, height: barHeight, top: (rowHeight - barHeight) / 2 }} onClick={() => onSelect(tab.id)} onDoubleClick={() => { if (!tab.closedAt) onFocus(tab.id); }}>
         {showImage && <span className="bar-thumbnail">{tab.thumbnail ? <img src={tab.thumbnail} alt={`Thumbnail of ${tab.title}`}/> : <Globe2 size={23}/>}</span>}
         <span className="bar-content"><span className="bar-title"><SiteIcon tab={tab} size="small"/><strong>{tab.title}</strong>{tab.frozen && <span className="group-chip frozen-chip">FROZEN</span>}{tab.groupTitle && <span className="group-chip" style={{ '--group-color': tab.groupColor || '#9ca8bb' } as React.CSSProperties}>{tab.groupTitle}</span>}{tab.closedAt && barWidth > 200 && <X size={11}/>}</span><span className="bar-subtitle">{domain(tab.originalUrl || tab.url)}<span>·</span>{duration((tab.closedAt || now) - tab.openedAt)}</span></span>
         {!tab.closedAt && <span className="bar-end-dot"/>}
@@ -614,9 +636,9 @@ function TimelineCanvas({ groups, allTabs, session, now, time, onTimeChange, sel
     </div>;
   };
 
-  return <div className="timeline-scroll" ref={viewportRef}><div className="timeline-canvas" ref={canvasRef} style={{ width, minHeight: contentHeight }}>
-    <div className="axis-header"><span className="axis-start">TIME</span>{Array.from({ length: 6 }, (_, i) => <span key={i} style={{ left: padding + i * plotWidth / 5 }}>{clock(session.startedAt + span * i / 5)}</span>)}</div>
-    <div className="grid-lines">{Array.from({ length: 6 }, (_, i) => <i key={i} style={{ left: padding + i * plotWidth / 5 }}/>)}</div>
+  return <div className="timeline-scroll" ref={viewportRef}><div className={`timeline-canvas ${verticalZoom < 1 ? 'dense-lanes' : ''}`} ref={canvasRef} style={{ width, minHeight: contentHeight, '--timeline-heading-height': `${headingHeight}px` } as React.CSSProperties}>
+    <div className="axis-header"><span className="axis-start">TIME</span>{Array.from({ length: tickIntervals + 1 }, (_, i) => <span key={i} style={{ left: padding + i * plotWidth / tickIntervals }}>{clock(session.startedAt + span * i / tickIntervals)}</span>)}</div>
+    <div className="grid-lines">{Array.from({ length: tickIntervals + 1 }, (_, i) => <i key={i} style={{ left: padding + i * plotWidth / tickIntervals }}/>)}</div>
     <div className={`now-line ${draggingTime ? 'dragging' : ''}`} style={{ left: nowX }} role="slider" aria-label="Timeline position" aria-valuemin={session.startedAt} aria-valuemax={session.endedAt || now} aria-valuenow={time} tabIndex={0} onPointerDown={startTimeDrag} onPointerMove={moveTimeDrag} onPointerUp={endTimeDrag} onPointerCancel={endTimeDrag} onKeyDown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); onTimeChange(Math.max(session.startedAt, Math.min(session.endedAt || now, time + (event.key === 'ArrowRight' ? 1000 : -1000)))); } }}><span>{clockWithSeconds(time)}</span><i/></div>
     {connections && <svg className="connections" width={width} height={contentHeight} aria-label="Tab opener connections"><defs><marker id="arrow" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#b09a7b" strokeWidth="1.2"/></marker><marker id="arrow-selected" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#d49b58" strokeWidth="1.2"/></marker></defs>{visibleTabs.map((tab) => {
       const openerId = tab.openerId;
@@ -628,12 +650,12 @@ function TimelineCanvas({ groups, allTabs, session, now, time, onTimeChange, sel
       const targetY = rowY.get(tab.id)!;
       const targetX = x(tab.openedAt);
       const sourceX = Math.max(x(parent.openedAt) + 9, targetX - 18);
-      const sourceY = parentY + (parentY < targetY ? 24 : -24);
+      const sourceY = parentY + (parentY < targetY ? barHeight / 2 : -barHeight / 2);
       const bend = parentY < targetY ? 9 : -9;
       const active = tab.id === selectedId || tab.openerId === selectedId;
       return <path key={tab.id} d={`M ${sourceX} ${sourceY} L ${sourceX} ${targetY - bend} Q ${sourceX} ${targetY} ${sourceX + 9} ${targetY} L ${targetX - 3} ${targetY}`} stroke={active ? '#d49b58' : '#b7aa98'} strokeWidth={active ? 1.6 : 1.2} opacity={active ? 1 : 0.65} fill="none" markerEnd={`url(#${active ? 'arrow-selected' : 'arrow'})`}/>;
     })}</svg>}
-    <div className="timeline-rows"><div className="activity-row" role="slider" aria-label="Active tabs by second" aria-valuemin={session.startedAt} aria-valuemax={session.endedAt || now} aria-valuenow={activityTime} aria-valuetext={`${clockWithSeconds(activityTime)}: ${activityDescription}`} tabIndex={0} title={`${clockWithSeconds(activityTime)} · ${activityDescription}`} onPointerMove={(event) => setActivityHoverTime(activityTimeFromPointer(event))} onPointerLeave={() => setActivityHoverTime(null)} onClick={(event) => { const second = activityTimeFromPointer(event); if (second !== null) onTimeChange(second); }} onKeyDown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); onTimeChange(Math.max(session.startedAt, Math.min(session.endedAt || now, time + (event.key === 'ArrowRight' ? 1000 : -1000)))); } }}>
+    <div className="timeline-rows"><div className="activity-row" style={{ height: activityRowHeight }} role="slider" aria-label="Active tabs by second" aria-valuemin={session.startedAt} aria-valuemax={session.endedAt || now} aria-valuenow={activityTime} aria-valuetext={`${clockWithSeconds(activityTime)}: ${activityDescription}`} tabIndex={0} title={`${clockWithSeconds(activityTime)} · ${activityDescription}`} onPointerMove={(event) => setActivityHoverTime(activityTimeFromPointer(event))} onPointerLeave={() => setActivityHoverTime(null)} onClick={(event) => { const second = activityTimeFromPointer(event); if (second !== null) onTimeChange(second); }} onKeyDown={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); onTimeChange(Math.max(session.startedAt, Math.min(session.endedAt || now, time + (event.key === 'ArrowRight' ? 1000 : -1000)))); } }}>
       <div className="activity-row-summary"><strong>ACTIVE TABS</strong><span>{clockWithSeconds(activityTime)} · {activityDescription}</span></div>
       <div className="activity-row-track" style={{ left: padding, width: plotWidth }}>{activitySegments.map(({ entry, start, end }, index) => { const focused = entry.windows.find((window) => window.windowId === entry.focusedWindowId)?.tabId; const active = entry.windows.filter((window) => window.tabId); const tabId = focused || active[0]?.tabId; const palette = ['#8ca6d3', '#8db6a0', '#c8a87d', '#b39cc9', '#d49da9']; const hash = [...(tabId || '')].reduce((value, character) => value + character.charCodeAt(0), 0); const segmentWidth = Math.max(1, x(end) - x(start)); const title = tabId ? tabTitleAt(allTabs.find((tab) => tab.id === tabId), start) : 'No active tab'; return <span key={`${entry.at}-${index}`} className={`activity-segment ${focused ? 'focused' : ''}`} style={{ left: x(start) - padding, width: segmentWidth, backgroundColor: tabId ? palette[hash % palette.length] : '#d9dee4' }}>{segmentWidth > 80 && <span>{title}{active.length > 1 ? ` +${active.length - 1}` : ''}</span>}</span>; })}{plotWidth * 1000 / span >= 4 && <span className="activity-second-ticks" style={{ backgroundSize: `${plotWidth * 1000 / span}px 100%` }}/>}</div>
     </div>{sections.map((section) => <Fragment key={section.key}>
