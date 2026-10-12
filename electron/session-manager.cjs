@@ -166,6 +166,7 @@ class SessionManager extends EventEmitter {
 
   listSessions() { return this.storage.listSessions(); }
   loadSession(id) { return this.storage.loadSession(id); }
+  importSession(value) { return this.storage.importSession(value); }
   listFolders() { return this.storage.listFolders(); }
   createFolder(name, parentId) { return this.storage.createFolder(name, parentId); }
   renameFolder(id, name) { return this.storage.renameFolder(id, name); }

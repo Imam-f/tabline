@@ -96,6 +96,7 @@ export interface TablineAPI {
   getNetwork(): Promise<NetworkState>;
   configureNetwork(options: NetworkConfig): Promise<NetworkState>;
   restorePeerSession(peerId: string, sessionId: string, at?: number): Promise<{ opened: number; skipped: number; failed: number; warnings: string[] }>;
+  importPeerSession(peerId: string, sessionId: string): Promise<Session>;
   onNetwork(callback: (state: NetworkState) => void): () => void;
   getState(): Promise<AppState>;
   getBrowsers(): Promise<BrowserChoice[]>;
@@ -114,6 +115,7 @@ export interface TablineAPI {
   loadSession(id: string): Promise<Session>;
   restoreSession(id: string, options?: { browser?: 'helium' | 'chrome'; executable?: string; at?: number }): Promise<RestoreResult>;
   exportSession(session: Session): Promise<boolean>;
+  importSession(): Promise<Session | null>;
   listFolders(): Promise<Folder[]>;
   createFolder(name: string, parentId?: string | null): Promise<Folder>;
   renameFolder(id: string, name: string): Promise<Folder>;

@@ -137,6 +137,16 @@ class NetworkManager extends EventEmitter {
     if (req.headers.origin || supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) { reply(401, { error: 'Connection token was rejected.' }); return; }
     try {
       if (req.method === 'GET' && req.url === '/v1/state') { reply(200, this.sharedState()); return; }
+      if (req.method === 'GET' && req.url.startsWith('/v1/sessions/')) {
+        const sessionId = req.url.slice('/v1/sessions/'.length);
+        if (!SESSION_ID.test(sessionId)) throw new Error('Invalid session ID.');
+        const runtime = this.manager.snapshot().sessions.find((item) => item.session.id === sessionId);
+        const session = runtime?.session || this.manager.loadSession(sessionId);
+        // Omit metadata that belongs only to the source machine.
+        const { browserDataDir, profileSourceSessionId, profileCopySkipped, restoredFromSessionId, folderId, order, ...portable } = session;
+        reply(200, portable);
+        return;
+      }
       if (req.method !== 'POST' || req.url !== '/v1/restore') { reply(404, { error: 'Unknown network operation.' }); return; }
       if (this.config.mode !== 'client') { reply(403, { error: 'Enable client mode on this machine to receive restore requests.' }); return; }
       if (this.restoring) { reply(409, { error: 'This client is already restoring a session.' }); return; }
@@ -186,6 +196,15 @@ class NetworkManager extends EventEmitter {
     const result = await requestPeer(peer, '/v1/restore', { sessionId, ...(at === undefined ? {} : { at }) });
     this.poll();
     return result;
+  }
+
+  async importPeer(peerId, sessionId) {
+    if (this.config.mode === 'off') throw new Error('Enable network mode first.');
+    const peer = this.config.peers.find((item) => item.id === peerId);
+    if (!peer) throw new Error('Instance is not configured.');
+    if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId)) throw new Error('Invalid session ID.');
+    const session = await requestPeer(peer, `/v1/sessions/${sessionId}`);
+    return this.manager.importSession(session);
   }
 }
 

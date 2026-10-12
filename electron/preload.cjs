@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('tabline', {
   getNetwork: () => ipcRenderer.invoke('network:get'),
   configureNetwork: (options) => ipcRenderer.invoke('network:configure', options),
   restorePeerSession: (peerId, sessionId, at) => ipcRenderer.invoke('network:restore', peerId, sessionId, at),
+  importPeerSession: (peerId, sessionId) => ipcRenderer.invoke('network:import', peerId, sessionId),
   onNetwork: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('network:changed', listener);
@@ -26,6 +27,7 @@ contextBridge.exposeInMainWorld('tabline', {
   loadSession: (id) => ipcRenderer.invoke('sessions:load', id),
   restoreSession: (id, options) => ipcRenderer.invoke('sessions:restore', id, options),
   exportSession: (session) => ipcRenderer.invoke('session:export', session),
+  importSession: () => ipcRenderer.invoke('session:import'),
   listFolders: () => ipcRenderer.invoke('folders:list'),
   createFolder: (name, parentId) => ipcRenderer.invoke('folder:create', name, parentId),
   renameFolder: (id, name) => ipcRenderer.invoke('folder:rename', id, name),

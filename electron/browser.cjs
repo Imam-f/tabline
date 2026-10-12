@@ -395,6 +395,13 @@ class BrowserController extends EventEmitter {
     return session;
   }
 
+  importSession(value) {
+    const { normalizeImportedSession } = require('./session-import.cjs');
+    const session = normalizeImportedSession(value);
+    writeJson(path.join(this.dataDir, 'sessions', `${session.id}.json`), session);
+    return this.loadSession(session.id);
+  }
+
   async launch(options = {}) {
     if (this.status === 'live' || this.status === 'launching' || this.status === 'stopping') throw new Error('A browser session is already running.');
     const browser = options.browser === 'chrome' ? 'chrome' : 'helium';

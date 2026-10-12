@@ -6,6 +6,7 @@ const path = require('node:path');
 const net = require('node:net');
 const { randomUUID } = require('node:crypto');
 const { NetworkManager, peerUrl } = require('../electron/network.cjs');
+const { SessionManager } = require('../electron/session-manager.cjs');
 
 const token = 'network-test-secret-token';
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -133,4 +134,64 @@ test('bind conflicts, self connections and incorrect tokens are visible errors',
 test('addresses accept only HTTP(S) instance origins', () => {
   assert.equal(peerUrl('http://192.168.1.10:45831'), 'http://192.168.1.10:45831');
   for (const value of ['file:///tmp/data', 'http://user:pass@localhost:1234', 'http://localhost/path', 'http://localhost/?token=secret']) assert.throws(() => peerUrl(value));
+});
+
+test('remote import copies saved and live sessions locally without overwriting data or launching a browser', async (t) => {
+  const local = fixture(t, 'local');
+  const remote = fixture(t, 'remote');
+  local.manager = new SessionManager(path.join(local.directory, 'browser-data'));
+  local.network.manager = local.manager;
+  remote.manager = new SessionManager(path.join(remote.directory, 'browser-data'));
+  remote.network.manager = remote.manager;
+  const source = remote.manager.importSession({
+    name: 'Remote saved trail', browser: 'chrome', startedAt: 100, endedAt: 500,
+    tabs: [{ id: 'child', title: 'Saved page', url: 'https://example.com', openedAt: 100, closedAt: 500, openAtEnd: true, thumbnail: 'data:image/jpeg;base64,aGVsbG8=', navigations: [{ at: 100, title: 'Saved page', url: 'https://example.com' }] }],
+  });
+  const address = await configure(remote.network, 'host');
+  await configure(local.network, 'host', [{ id: 'remote', url: address, token }]);
+  await until(() => local.network.snapshot().peers[0].connected);
+  const copy = await local.network.importPeer('remote', source.id);
+  assert.notEqual(copy.id, source.id);
+  assert.deepEqual(copy.tabs, source.tabs);
+  assert.equal(local.manager.listSessions().length, 1);
+  assert.deepEqual(local.manager.loadSession(copy.id), copy);
+  assert.equal(local.manager.hasRunningSessions(), false);
+  assert.deepEqual(remote.manager.loadSession(source.id), source);
+  const duplicate = await local.network.importPeer('remote', source.id);
+  assert.notEqual(duplicate.id, copy.id);
+  assert.equal(local.manager.listSessions().length, 2);
+  const live = { ...source, name: 'Remote live trail', endedAt: null, savedAt: 800, tabs: source.tabs.map((tab) => ({ ...tab, closedAt: null })) };
+  remote.manager.snapshot = () => ({ status: 'live', session: live, sessions: [{ status: 'live', session: live, debugPort: 12345 }] });
+  const liveCopy = await local.network.importPeer('remote', live.id);
+  assert.equal(liveCopy.name, live.name);
+  assert.equal(liveCopy.endedAt, 800);
+  assert.equal(liveCopy.tabs[0].closedAt, 800);
+  assert.equal(liveCopy.tabs[0].openAtEnd, true);
+  assert.equal(live.tabs[0].closedAt, null);
+  await assert.rejects(local.network.importPeer('remote', '../../data'), /Invalid session ID/);
+  await assert.rejects(local.network.importPeer('unknown', source.id), /not configured/);
+  await assert.rejects(local.network.importPeer('remote', randomUUID()));
+  remote.manager.snapshot = () => ({ sessions: [{ session: { id: source.id, tabs: 'invalid' } }] });
+  await assert.rejects(local.network.importPeer('remote', source.id), /Invalid session data/);
+  assert.equal(local.manager.listSessions().length, 3, 'failed imports must not persist anything');
+  await local.network.configure({ ...local.network.config, mode: 'off' });
+  await assert.rejects(local.network.importPeer('remote', source.id), /Enable network/);
+});
+
+test('remote session reads require authentication and reject path traversal and browser origins', async (t) => {
+  const remote = fixture(t, 'remote');
+  const address = await configure(remote.network, 'host');
+  for (const headers of [{}, { Authorization: 'Bearer wrong' }, { Authorization: `Bearer ${token}`, Origin: 'https://example.com' }]) {
+    assert.equal((await fetch(`${address}/v1/sessions/${remote.id}`, { headers })).status, 401);
+  }
+  const headers = { Authorization: `Bearer ${token}` };
+  remote.session.browserDataDir = 'local-profile';
+  remote.session.folderId = 'local-folder';
+  const response = await fetch(`${address}/v1/sessions/${remote.id}`, { headers });
+  assert.equal(response.status, 200);
+  const session = await response.json();
+  assert.deepEqual(session.tabs, remote.session.tabs);
+  assert.equal(Object.hasOwn(session, 'browserDataDir'), false);
+  assert.equal(Object.hasOwn(session, 'folderId'), false);
+  assert.equal((await fetch(`${address}/v1/sessions/%2e%2e%2fdata`, { headers })).status, 400);
 });

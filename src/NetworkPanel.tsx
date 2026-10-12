@@ -1,18 +1,20 @@
 import { useState } from 'react';
-import { Globe2, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowDownToLine, Globe2, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import type { NetworkConfig, NetworkState } from './types';
 
-export default function NetworkPanel({ network, onConfigure, onView, onRestore }: {
+export default function NetworkPanel({ network, onConfigure, onView, onRestore, onImport }: {
   network: NetworkState;
   onConfigure: (config: NetworkConfig) => Promise<void>;
   onView: (peerId: string, sessionId: string) => void;
   onRestore: (peerId: string, sessionId: string) => Promise<void>;
+  onImport: (peerId: string, sessionId: string) => Promise<void>;
 }) {
   const [config, setConfig] = useState(network.config);
   const [saving, setSaving] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const [showToken, setShowToken] = useState(false);
   const update = (patch: Partial<NetworkConfig>) => setConfig((previous) => ({ ...previous, ...patch }));
+  const importButton = (peerId: string, sessionId: string, connected: boolean) => <button className="button secondary" disabled={!connected || pending !== null} title="Save a copy of this timeline on this device" onClick={async () => { setPending(`import:${peerId}:${sessionId}`); try { await onImport(peerId, sessionId); } finally { setPending(null); } }}><ArrowDownToLine size={13}/>{pending === `import:${peerId}:${sessionId}` ? 'Importing…' : 'Import to this device'}</button>;
   return <section className="network-panel">
     <div className="network-settings">
       <h2>This instance</h2>
@@ -38,10 +40,10 @@ export default function NetworkPanel({ network, onConfigure, onView, onRestore }
         {!peer.connected && peer.lastSeen && <p>Last connected {new Date(peer.lastSeen).toLocaleTimeString()}. Displayed data is from that connection.</p>}
         {peer.data?.restoring && <p role="status">This client is restoring a session…</p>}
         <h4>Open timelines</h4>
-        {peer.data?.state.sessions.map((runtime) => <div className="network-session" key={runtime.session.id}><div><strong>{runtime.session.name}</strong><small>{runtime.session.tabs.length} tabs · {runtime.status === 'live' ? 'Recording' : runtime.status}</small></div><button className="button secondary" onClick={() => onView(peer.id, runtime.session.id)}>View timeline</button></div>)}
+        {peer.data?.state.sessions.map((runtime) => <div className="network-session" key={runtime.session.id}><div><strong>{runtime.session.name}</strong><small>{runtime.session.tabs.length} tabs · {runtime.status === 'live' ? 'Recording' : runtime.status}</small></div><div className="network-session-actions"><button className="button secondary" onClick={() => onView(peer.id, runtime.session.id)}>View timeline</button>{importButton(peer.id, runtime.session.id, peer.connected)}</div></div>)}
         {!peer.data?.state.sessions.length && <p>No open timelines on this machine.</p>}
         <h4>Saved on this machine</h4>
-        {peer.data?.savedSessions.map((session) => <div className="network-session" key={session.id}><div><strong>{session.name}</strong><small>{session.tabCount} tabs · {new Date(session.startedAt).toLocaleDateString()}</small></div><button className="button secondary" disabled={!peer.connected || peer.data?.mode !== 'client' || peer.data.restoring || pending !== null} title="Reopen this saved session on its own machine" onClick={async () => { setPending(`${peer.id}:${session.id}`); try { await onRestore(peer.id, session.id); } finally { setPending(null); } }}><RefreshCw size={13}/>{pending === `${peer.id}:${session.id}` ? 'Restoring…' : 'Resume on client'}</button></div>)}
+        {peer.data?.savedSessions.map((session) => <div className="network-session" key={session.id}><div><strong>{session.name}</strong><small>{session.tabCount} tabs · {new Date(session.startedAt).toLocaleDateString()}</small></div><div className="network-session-actions">{importButton(peer.id, session.id, peer.connected)}<button className="button secondary" disabled={!peer.connected || peer.data?.mode !== 'client' || peer.data.restoring || pending !== null} title="Reopen this saved session on its own machine" onClick={async () => { setPending(`${peer.id}:${session.id}`); try { await onRestore(peer.id, session.id); } finally { setPending(null); } }}><RefreshCw size={13}/>{pending === `${peer.id}:${session.id}` ? 'Restoring…' : 'Resume on client'}</button></div></div>)}
         {!peer.data?.savedSessions.length && <p>No saved sessions on this machine.</p>}
         {peer.connected && peer.data?.mode !== 'client' && <p>Enable client mode on this machine to accept restore requests.</p>}
       </article>)}

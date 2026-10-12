@@ -5,6 +5,7 @@ const { detectBrowsers } = require('./browser.cjs');
 const { SessionManager } = require('./session-manager.cjs');
 const { VirtualDesktopResolver } = require('./virtual-desktop.cjs');
 const { NetworkManager } = require('./network.cjs');
+const { readSessionImport } = require('./session-import.cjs');
 
 let window;
 let manager;
@@ -36,6 +37,7 @@ else {
     ipcMain.handle('network:get', () => network.snapshot());
     ipcMain.handle('network:configure', (_event, options) => network.configure(options));
     ipcMain.handle('network:restore', (_event, peerId, sessionId, at) => network.restorePeer(peerId, sessionId, at));
+    ipcMain.handle('network:import', (_event, peerId, sessionId) => network.importPeer(peerId, sessionId));
     ipcMain.handle('state:get', () => manager.snapshot());
     ipcMain.handle('browsers:list', () => detectBrowsers());
     ipcMain.handle('browser:choose', async () => {
@@ -55,6 +57,11 @@ else {
     ipcMain.handle('sessions:list', () => manager.listSessions());
     ipcMain.handle('sessions:load', (_event, id) => manager.loadSession(id));
     ipcMain.handle('sessions:restore', (_event, id, options) => manager.restoreSession(id, options));
+    ipcMain.handle('session:import', async () => {
+      const result = await dialog.showOpenDialog(window, { title: 'Import session', properties: ['openFile'], filters: [{ name: 'JSON session', extensions: ['json'] }] });
+      if (result.canceled) return null;
+      return manager.importSession(await readSessionImport(result.filePaths[0]));
+    });
     ipcMain.handle('folders:list', () => manager.listFolders());
     ipcMain.handle('folder:create', (_event, name, parentId) => manager.createFolder(name, parentId));
     ipcMain.handle('folder:rename', (_event, id, name) => manager.renameFolder(id, name));

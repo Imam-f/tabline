@@ -59,7 +59,7 @@ Installers are placed in `release/`. `npm run dist:dir` creates an unpacked desk
 - **Tab freezer** — the Tabline companion extension can turn an individual tab into a persistent local short URL backed by its latest screenshot. Tabs inactive for five minutes get a preserved screenshot; after ten minutes they move to the snapshot page. The snapshot page has a floating return button, and the app's tab details panel also provides **Freeze tab** and **Return to original page** controls for live tabs. The extension can whitelist the current tab; its **Freeze all tabs** action freezes other tabs across all browser windows and virtual desktops, leaving the current tab and whitelisted pages untouched. Extension UI pages are excluded from the timeline.
 - **Concurrent sessions** — track multiple browser sessions at once and switch between them from the session tabs or sidebar. Every session has an isolated browser data directory cloned from the previous session; restoring a saved session automatically duplicates its profile and timeline into a new live session.
 - **Network instances** — monitor several Tabline machines simultaneously, with automatically updating remote timelines and reconnection. Client mode waits for another instance to request a saved-session restore on the client machine.
-- **Saved sessions** — automatically persist timelines, navigation history, and thumbnails locally. Click a saved session to select it, double-click to open it, or drag it to reorder. Organize sessions into folders, rename or delete them, and export an opened session as portable JSON. Deleting a session also deletes its browser data directory.
+- **Saved sessions** — automatically persist timelines, navigation history, and thumbnails locally. Click a saved session to select it, double-click to open it, or drag it to reorder. Organize sessions into folders, rename or delete them, and export an opened session as portable JSON. In **Saved sessions**, click **Import session** to load a JSON export, or **Import from remote** to choose a connected machine. Imports create independent local copies with new IDs, preserving history, thumbnails, groups, and tab connections. Open an imported session to view its timeline or restore its tabs locally. Deleting a session also deletes its browser data directory.
 - **Crash recovery** — save changes to disk before displaying updates, with atomic replacement and a backup of the previous save. After an interruption, open **Saved sessions** to recover the timeline and restore its open tabs. Folder organization and freezer data also recover from complete pending saves or backups.
 - **Demo mode** — explore an example timeline without launching a browser. The standalone web preview (`npm run dev:web`) uses the demo; browser launching requires Electron.
 
@@ -81,10 +81,11 @@ Open **Network instances** in the desktop app on each machine. Networking is off
 1. Choose **Host** to share local timelines and monitor other machines, or **Client** to also accept requests to resume saved sessions on this machine. Apply the settings. Client mode waits without launching a browser; local browser sessions can still run and be tracked normally.
 2. On the monitoring machine, click **Add instance**, enter the other machine’s displayed address and its connection token, and apply the settings. Add several machines to monitor them together. Add the connection on both sides if both machines should monitor each other.
 3. Connected machines show their open timelines and saved sessions. **View timeline** opens a remote timeline that updates every two seconds. **Resume on client** reopens the selected saved session on that client using its own saved data and browser profile. It creates a new live session and preserves the saved source. The client chooses an installed browser using the existing restore fallback.
+4. Click **Import to this device** beside an open timeline or saved session to save a local copy, including its history and thumbnails. This works with both host and client machines running a version that supports imports. An open timeline is imported as a snapshot at the time of transfer. Imports appear selected under **Saved sessions → Unfiled** and can be viewed or restored even after the source machine disconnects. Browser profiles, cookies, and logins are not included.
 
 Use a trusted LAN or VPN and allow the selected listen port (default **45831**) through the machine’s firewall. The listener binds to all IPv4 interfaces when enabled. HTTP traffic is not encrypted and includes the token, URLs, history, and screenshots. Anyone with an instance’s token can read its shared sessions and, in client mode, request a restore. Tabline rejects unauthenticated requests and browser-origin requests; remote restore requests accept only saved session IDs and optional timeline times, never executable paths. Browser profiles, cookies, and login files are not transferred. **Off** stops listening and monitoring; settings persist for the next launch. Offline machines reconnect automatically and show their last received timeline as offline.
 
-Each machine saves its own sessions independently; network connections provide monitoring and remote resume. To run independent instances on one machine, set **TABLINE_DATA_DIR** to a different absolute directory for each process and choose a different network port in each instance. For example, in PowerShell:
+Each machine saves its own sessions independently; network connections provide monitoring, remote resume, and importing copies to this device. To run independent instances on one machine, set **TABLINE_DATA_DIR** to a different absolute directory for each process and choose a different network port in each instance. For example, in PowerShell:
 
 ```powershell
 $env:TABLINE_DATA_DIR = 'C:\Tabline\client-one'
@@ -138,7 +139,7 @@ Session changes are saved and flushed to disk before the app displays the update
 ## Development & checks
 
 ```sh
-npm test             # tracking, crash recovery, URL validation, network instances
+npm test             # tracking, crash recovery, imports, URL validation, network instances
 npm run build        # TypeScript check and production renderer build
 npm run test:browser # real-browser integration check using local fixture pages
 npm run test:desktop # production Electron UI and preload end-to-end check
@@ -153,6 +154,7 @@ electron/
   main.cjs                Electron window, IPC, and lifecycle
   preload.cjs             Sandboxed renderer bridge
   session-manager.cjs     Concurrent browser-session routing and active-session state
+  session-import.cjs      JSON import validation and portable timeline normalization
   network.cjs             Authenticated instance monitoring and client restore listener
   browser.cjs             Browser launch, tracking, capture, persistence, restore, freezer
   storage.cjs             Flushed atomic JSON writes, backups, and recovery
@@ -180,6 +182,7 @@ scripts/
 tests/
   browser.test.cjs        Automated browser-controller and CDP tests
   network.test.cjs        Multi-instance monitoring, authentication, reconnect, remote restore
+  session-import.test.cjs Local import, validation, independent copies, restore selection
   storage.test.cjs        Forced termination, interrupted saves, backups, and recovery
 docs/                    README screenshots
 public/                  Static renderer assets
