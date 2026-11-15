@@ -63,7 +63,7 @@ function browserCandidates(platform = process.platform, env = process.env) {
   const pf = env.PROGRAMFILES || 'C:\\Program Files';
   const pfx = env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
   if (platform === 'win32') return {
-    helium: [path.join(local, 'Helium', 'Application', 'helium.exe'), path.join(local, 'Helium', 'helium.exe'), path.join(pf, 'Helium', 'Application', 'helium.exe'), path.join(pf, 'Helium', 'helium.exe')],
+    helium: [path.join(local, 'imput', 'Helium', 'Application', 'chrome.exe'), path.join(local, 'Helium', 'Application', 'helium.exe'), path.join(local, 'Helium', 'helium.exe'), path.join(pf, 'Helium', 'Application', 'helium.exe'), path.join(pf, 'Helium', 'helium.exe')],
     chrome: [path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'), path.join(pfx, 'Google', 'Chrome', 'Application', 'chrome.exe'), path.join(local, 'Google', 'Chrome', 'Application', 'chrome.exe')],
   };
   if (platform === 'darwin') return {
@@ -100,7 +100,7 @@ function upsertTarget(session, info, now = Date.now()) {
     tab = { id: info.targetId, title: info.title || 'New tab', url: info.url || 'about:blank', openedAt: now, closedAt: null, openAtEnd: true, openerId: info.openerId || null, windowId: info.windowId || null, desktopId: info.desktopId || 'unknown', windowHistory: [], extensionTabId: null, extensionWindowId: null, tabIndex: null, pinned: false, active: false, focused: false, lastActiveAt: null, inactiveScreenshotAt: null, frozen: false, frozenSlug: null, originalUrl: null, orderHistory: [], groupId: null, groupTitle: null, groupColor: null, groupCollapsed: false, groupHistory: [], thumbnail: null, thumbnailAt: null, navigations: [] };
     session.tabs.push(tab);
   }
-  if (info.openerId) tab.openerId = info.openerId;
+  if (info.openerId) { tab.openerId = info.openerId; tab.openerSource = 'cdp'; }
   if (info.windowId) tab.windowId = info.windowId;
   if (info.desktopId) tab.desktopId = info.desktopId;
   if (info.url && (tab.navigations.length === 0 || tab.url !== info.url)) {
@@ -165,6 +165,10 @@ class BrowserController extends EventEmitter {
     this.activityInterval = null;
     this.activityBusy = false;
     this.lastCompanionSnapshotAt = 0;
+    this.exactTabTargets = new Map();
+    this.pendingTabSources = new Map();
+    this.explicitOpeners = new Map();
+    this.snapshotSequences = new Map();
     this.debugPort = null;
     this.lastError = null;
     this.lastPersistedSession = null;
@@ -472,8 +476,13 @@ class BrowserController extends EventEmitter {
       if (!endpoint) throw new Error('The browser did not expose a debug connection within 15 seconds.');
       this.client = new CDP(endpoint);
       await this.client.connect();
+      this.exactTabTargets.clear();
+      this.pendingTabSources.clear();
+      this.explicitOpeners.clear();
+      this.snapshotSequences.clear();
       this.session = { id: sessionId, name: options.name?.trim().slice(0, 80) || 'Untitled session', browser, startedAt: Date.now(), endedAt: null, browserDataDir: sessionId, profileSourceSessionId: options.profileSourceSessionId || null, profileCopySkipped, activityHistory: [], tabs: [] };
-      this.client.on('Target.targetCreated', ({ targetInfo }) => this.onTarget(targetInfo));
+      let discoveryReady = false;
+      this.client.on('Target.targetCreated', ({ targetInfo }) => this.onTarget(targetInfo, { created: discoveryReady }));
       this.client.on('Target.targetInfoChanged', ({ targetInfo }) => this.onTarget(targetInfo));
       this.client.on('Target.targetDestroyed', ({ targetId }) => {
         const tab = this.session?.tabs.find((item) => item.id === targetId);
@@ -486,6 +495,7 @@ class BrowserController extends EventEmitter {
       await this.client.send('Target.setDiscoverTargets', { discover: true });
       const { targetInfos } = await this.client.send('Target.getTargets');
       targetInfos.forEach((info) => this.onTarget(info));
+      discoveryReady = true;
       this.interval = setInterval(() => this.captureAll(), 60000);
       this.locationInterval = setInterval(() => this.refreshAllTargetLocations().catch(() => {}), 1000);
       this.inactivityInterval = setInterval(() => this.checkInactiveTabs().catch(() => {}), 1000);
@@ -505,7 +515,7 @@ class BrowserController extends EventEmitter {
     }
   }
 
-  onTarget(info) {
+  onTarget(info, { created = false } = {}) {
     if (!this.session) return;
     if (info.type === 'page' && info.url?.startsWith('chrome-extension://')) {
       const index = this.session.tabs.findIndex((item) => item.id === info.targetId);
@@ -513,11 +523,24 @@ class BrowserController extends EventEmitter {
       return;
     }
     const previous = this.session.tabs.find((tab) => tab.id === info.targetId);
+    // Capture the last observed focus before inserting the new target. Never
+    // infer ancestry for initial discovery, restored history, or later updates.
+    const focused = created && !previous ? this.session.tabs.filter((tab) => tab.focused && tab.active && !tab.closedAt) : [];
+    const inferredParent = focused.length === 1 && Date.now() - (this.lastActivityObservedAt || 0) <= 4000 ? focused[0] : null;
     const frozenEntry = this.entryForUrl(info.url);
     const previousFrozenEntry = this.entryForTab(previous);
     const shouldCapture = !frozenEntry && (!previous || previous.url !== info.url || previous.title !== info.title) && !previous?.inactiveScreenshotAt;
     const tab = upsertTarget(this.session, info);
     if (!tab) return;
+    if (!tab.openerId && inferredParent && inferredParent.id !== tab.id) {
+      tab.openerId = inferredParent.id;
+      tab.openerSource = 'focused-tab';
+    }
+    this.resolveTabSources();
+    if (this.explicitOpeners.has(tab.id)) {
+      tab.openerId = this.explicitOpeners.get(tab.id).openerId;
+      tab.openerSource = 'navigation';
+    }
     if (frozenEntry) {
       tab.frozen = true;
       tab.frozenSlug = frozenEntry.slug;
@@ -587,6 +610,8 @@ class BrowserController extends EventEmitter {
           this.restoreResolve?.(message);
           this.restoreResolve = null;
           response.writeHead(204, headers); response.end();
+        } else if (request.url === '/tab-sources') {
+          sendJson(response, 200, this.onTabSources(message));
         } else if (request.url === '/tab-groups') {
           this.onTabSnapshot(message);
           response.writeHead(204, headers); response.end();
@@ -612,16 +637,62 @@ class BrowserController extends EventEmitter {
     this.bridgePort = this.groupBridge.address().port;
   }
 
+  rememberTabTarget(tabId, targetId) {
+    if (Number.isSafeInteger(tabId) && tabId >= 0 && typeof targetId === 'string' && targetId.length > 0 && targetId.length <= 256) {
+      // Only debugger-provided bindings enter this map, never URL-derived metadata.
+      if (!this.exactTabTargets.has(tabId)) this.exactTabTargets.set(tabId, targetId);
+    }
+  }
+
+  onTabSources(message) {
+    if (!message || !Array.isArray(message.relationships) || message.relationships.length > 1000) throw new Error('Invalid tab relationships');
+    for (const event of message.relationships) {
+      if (!event || !Number.isSafeInteger(event.tabId) || event.tabId < 0 || !Number.isSafeInteger(event.sourceTabId) || event.sourceTabId < 0 || event.tabId === event.sourceTabId || !Number.isFinite(event.timeStamp) || event.timeStamp < 0) throw new Error('Invalid tab relationship');
+      for (const key of ['targetId', 'sourceTargetId']) if (event[key] !== undefined && (typeof event[key] !== 'string' || !event[key] || event[key].length > 256)) throw new Error('Invalid target binding');
+    }
+    if (!this.session || this.session.endedAt) return { acknowledged: [] };
+    for (const event of message.relationships) {
+      this.rememberTabTarget(event.tabId, event.targetId);
+      this.rememberTabTarget(event.sourceTabId, event.sourceTargetId);
+      const previous = this.pendingTabSources.get(event.tabId);
+      if (!previous) this.pendingTabSources.set(event.tabId, { ...event, receivedAt: Date.now() });
+    }
+    this.resolveTabSources();
+    this.publish();
+    return { acknowledged: message.relationships.filter((event) => {
+      const applied = this.explicitOpeners.get(this.exactTabTargets.get(event.tabId));
+      return applied && applied.sourceTabId === event.sourceTabId && applied.timeStamp === event.timeStamp;
+    }).map((event) => ({ tabId: event.tabId, sourceTabId: event.sourceTabId, timeStamp: event.timeStamp })) };
+  }
+
+  resolveTabSources() {
+    if (!this.session) return;
+    for (const [tabId, event] of this.pendingTabSources) {
+      if (Date.now() - event.receivedAt > 300000) { this.pendingTabSources.delete(tabId); continue; }
+      const targetId = this.exactTabTargets.get(tabId);
+      const sourceId = this.exactTabTargets.get(event.sourceTabId);
+      const child = this.session.tabs.find((tab) => tab.id === targetId);
+      const parent = this.session.tabs.find((tab) => tab.id === sourceId);
+      if (!child || !parent || child === parent) continue;
+      // Creation is immutable. Late metadata must not reparent an explicit link.
+      if (!this.explicitOpeners.has(targetId)) {
+        this.explicitOpeners.set(targetId, { openerId: sourceId, sourceTabId: event.sourceTabId, timeStamp: event.timeStamp });
+        child.openerId = sourceId;
+        child.openerSource = 'navigation';
+      }
+      this.pendingTabSources.delete(tabId);
+    }
+  }
+
   onTabSnapshot(message) {
     if (!this.session || !Array.isArray(message.tabs)) return;
-    if (message.source && message.source !== this.lastSnapshotSource) {
-      this.lastSnapshotSource = message.source;
-      this.lastSnapshotSequence = 0;
-    }
+    const source = typeof message.source === 'string' ? message.source : 'legacy';
     if (Number.isInteger(message.sequence)) {
-      if (message.sequence <= (this.lastSnapshotSequence || 0)) return;
-      this.lastSnapshotSequence = message.sequence;
+      if (message.sequence <= (this.snapshotSequences.get(source) || 0)) return;
+      this.snapshotSequences.set(source, message.sequence);
     }
+    for (const info of message.tabs) this.rememberTabTarget(info.tabId, info.targetId);
+    this.resolveTabSources();
     for (const info of message.tabs) this.onGroupInfo(info, false);
     if (!Object.hasOwn(message, 'focusedWindowId')) { this.publish(); return; }
     const openTabs = this.session.tabs.filter((tab) => !tab.closedAt);
@@ -638,6 +709,7 @@ class BrowserController extends EventEmitter {
   recordActivity(windows, focusedWindowId) {
     if (!this.session) return;
     const now = Date.now();
+    this.lastActivityObservedAt = now;
     const ordered = windows.filter((window) => window.windowId).sort((a, b) => a.windowId.localeCompare(b.windowId));
     const activeIds = new Set(ordered.map((window) => window.tabId).filter(Boolean));
     for (const tab of this.session.tabs.filter((item) => !item.closedAt)) {
@@ -694,11 +766,13 @@ class BrowserController extends EventEmitter {
   onGroupInfo(info, publish = true) {
     const tabs = this.session?.tabs || [];
     const unique = (candidates) => candidates.length === 1 ? candidates[0] : null;
-    const tab = tabs.find((item) => item.id === info.targetId)
-      || unique(tabs.filter((item) => item.windowId === String(info.windowId) && item.url === info.url && item.title === info.title))
+    // A supplied target ID is authoritative even before CDP discovers it.
+    // Never apply that target's metadata to another tab sharing its URL.
+    const tab = info.targetId ? tabs.find((item) => item.id === info.targetId) : (
+      unique(tabs.filter((item) => item.windowId === String(info.windowId) && item.url === info.url && item.title === info.title))
       || unique(tabs.filter((item) => item.windowId === String(info.windowId) && item.url === info.url))
       || unique(tabs.filter((item) => item.url === info.url && item.title === info.title))
-      || unique(tabs.filter((item) => item.url === info.url));
+      || unique(tabs.filter((item) => item.url === info.url)));
     if (!tab) return;
     const groupId = Number.isInteger(info.groupId) && info.groupId >= 0 ? info.groupId : null;
     const changed = tab.groupId !== groupId || tab.groupTitle !== (info.groupTitle || null) || tab.groupColor !== (info.groupColor || null) || tab.groupCollapsed !== (info.groupCollapsed || false);

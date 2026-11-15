@@ -8,6 +8,7 @@ export interface BrowserTab {
   closedAt: number | null;
   openAtEnd?: boolean;
   openerId: string | null;
+  openerSource?: 'navigation' | 'cdp' | 'focused-tab';
   windowId: string | null;
   desktopId: string;
   windowBounds?: { left: number; top: number; width: number; height: number; windowState?: string } | null;

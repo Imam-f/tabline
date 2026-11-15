@@ -4,11 +4,65 @@ let restoring = false;
 let snapshotSequence = 0;
 const snapshotSource = crypto.randomUUID();
 
+// Keep events until the bridge acknowledges an exact mapping, including across
+// MV3 worker restarts. Snapshot sequencing never discards creation events.
+const knownTargets = new Map();
+let sourceOutbox = [];
+let sourceFlushScheduled = false;
+let sourceWork = chrome.storage.session.get('tablineSources').then((value) => {
+  sourceOutbox = value.tablineSources || [];
+});
+function sourceTask(task) {
+  sourceWork = sourceWork.then(task).catch((error) => console.warn('Tabline source tracking:', error));
+  return sourceWork;
+}
+function scheduleSourceFlush() {
+  if (sourceFlushScheduled) return;
+  sourceFlushScheduled = true;
+  sourceTask(async () => {
+    try { await flushSources(); } finally { sourceFlushScheduled = false; }
+  });
+}
+async function saveSources() {
+  await chrome.storage.session.set({ tablineSources: sourceOutbox });
+}
+async function flushSources() {
+  if (!sourceOutbox.length) return;
+  const targets = await targetMap();
+  for (const [id, target] of targets) knownTargets.set(id, target);
+  for (const event of sourceOutbox) {
+    event.targetId ||= knownTargets.get(event.tabId);
+    event.sourceTargetId ||= knownTargets.get(event.sourceTabId);
+  }
+  const expired = sourceOutbox.filter((event) => Date.now() - event.queuedAt > 300000);
+  for (const event of expired) console.warn('Tabline could not resolve source relationship within five minutes', event);
+  sourceOutbox = sourceOutbox.filter((event) => !expired.includes(event));
+  await saveSources();
+  if (!sourceOutbox.length) return;
+  const response = await fetch(`${bridgeOrigin}/tab-sources`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ relationships: sourceOutbox.slice(0, 1000).map(({ queuedAt, ...event }) => event) }),
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error(`Source bridge returned ${response.status}`);
+  const { acknowledged } = await response.json();
+  sourceOutbox = sourceOutbox.filter((event) => !acknowledged.some((ack) => ack.tabId === event.tabId && ack.sourceTabId === event.sourceTabId && ack.timeStamp === event.timeStamp));
+  await saveSources();
+}
+chrome.webNavigation.onCreatedNavigationTarget.addListener((details) => {
+  sourceTask(async () => {
+    sourceOutbox.push({ sourceTabId: details.sourceTabId, tabId: details.tabId, timeStamp: details.timeStamp,
+      sourceTargetId: knownTargets.get(details.sourceTabId), targetId: knownTargets.get(details.tabId), queuedAt: Date.now() });
+    await saveSources();
+    scheduleSourceFlush();
+  });
+});
+
 async function targetMap() {
   try {
     if (!chrome.debugger?.getTargets) return new Map();
     const targets = await new Promise((resolve) => chrome.debugger.getTargets(resolve));
-    return new Map(targets.filter((target) => target.type === 'page' && target.tabId !== undefined).map((target) => [target.tabId, target.targetId]));
+    return new Map(targets.filter((target) => target.type === 'page' && target.tabId !== undefined && typeof target.id === 'string' && target.id).map((target) => [target.tabId, target.id]));
   } catch { return new Map(); }
 }
 
@@ -32,6 +86,8 @@ async function sendSnapshot(tabIds = null) {
   if (!bridgeUrl) return;
   const sequence = ++snapshotSequence;
   const targets = await targetMap();
+  for (const [id, target] of targets) knownTargets.set(id, target);
+  scheduleSourceFlush();
   const tabs = await queryTabs();
   const windows = await queryWindows();
   const focusedWindows = new Set(windows.filter((window) => window.focused).map((window) => window.id));

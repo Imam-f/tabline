@@ -42,6 +42,7 @@ function normalizeImportedSession(value) {
     const tab = record(value, {
       id: isId, title: isString, url: isString, openedAt: isTime, closedAt: nullable(isTime),
       openAtEnd: isBoolean, openerId: nullable(isString), windowId: nullable(isString), desktopId: isString,
+      openerSource: (source) => ['navigation', 'cdp', 'focused-tab'].includes(source),
       extensionTabId: nullable(isInteger), extensionWindowId: nullable(isInteger), tabIndex: nullable(isInteger),
       pinned: isBoolean, active: isBoolean, focused: isBoolean, lastActiveAt: nullable(isTime),
       inactiveScreenshotAt: nullable(isTime), frozen: isBoolean, frozenSlug: nullable(isString), originalUrl: nullable(isString),
