@@ -6,6 +6,7 @@ const http = require('node:http');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { CDP } = require('../electron/cdp.cjs');
+const { BrowserController, detectBrowsers } = require('../electron/browser.cjs');
 const { NetworkManager } = require('../electron/network.cjs');
 const electron = require('electron');
 
@@ -44,6 +45,7 @@ async function freePort() {
   let sessionId;
   let evaluate;
   let peerNetwork;
+  const externalBrowser = new BrowserController(path.join(dataDir, 'external-browser'));
   try {
     const endpoint = await waitFor(() => output.match(/DevTools listening on (ws:\/\/[^\s]+)/)?.[1], 'Electron debug endpoint', 40000);
     client = new CDP(endpoint);
@@ -62,6 +64,12 @@ async function freePort() {
     assert.equal(await evaluate(`typeof require`), 'undefined', 'Node integration must be disabled');
     await evaluate(`document.querySelector('.page-heading .primary').click()`);
     await waitFor(() => evaluate(`!!document.querySelector('.modal')`), 'launcher dialog');
+    assert.equal(await evaluate(`typeof window.tabline.attach`), 'function');
+    assert.equal(await evaluate(`typeof window.tabline.openDebuggingSettings`), 'function');
+    await evaluate(`document.querySelector('.session-mode-options button:last-child').click()`);
+    await waitFor(() => evaluate(`!!document.querySelector('.debugging-setup') && !document.querySelector('#start-url')`), 'track active session mode');
+    assert.match(await evaluate(`document.querySelector('.debugging-setup').innerText`), /click Allow/);
+    await evaluate(`document.querySelector('.session-mode-options button:first-child').click()`);
     await waitFor(() => evaluate(`document.querySelector('.browser-option.selected')?.innerText.includes('Detected')`), 'detected browser');
     const localUrl = `http://127.0.0.1:${server.address().port}`;
     await evaluate(`(() => { const input=document.querySelector('#start-url'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(localUrl)}); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
@@ -162,10 +170,29 @@ async function freePort() {
     await evaluate(`document.querySelector('[aria-label="Return to current session"]').click()`);
     assert.equal(await evaluate(`!!document.querySelector('.network-view-banner')`), false);
     await evaluate(`window.tabline.configureNetwork(${JSON.stringify({ ...networkConfig, mode: 'off', port: networkPort })})`);
+    // Attach through the production UI to an independently running isolated browser.
+    const externalChoice = detectBrowsers().find((item) => item.path);
+    await externalBrowser.launch({ browser: externalChoice.id, executable: externalChoice.path, url: localUrl, name: 'External browser fixture' });
+    await evaluate(`document.querySelector('.page-heading .primary').click()`);
+    await waitFor(() => evaluate(`!!document.querySelector('.session-mode-options')`), 'new session menu for external browser');
+    await evaluate(`document.querySelector('.session-mode-options button:last-child').click()`);
+    await evaluate(`document.querySelector('.advanced-toggle').click()`);
+    await evaluate(`(() => { const input=document.querySelector('#debugging-address'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(externalBrowser.client.url)}); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+    await delay(100);
+    await evaluate(`document.querySelector('.launch-submit').click()`);
+    await waitFor(() => evaluate(`window.tabline.getState().then(state=>state.session?.connectionMode==='attached' && state.status==='live')`), 'external session attached through UI');
+    await waitFor(() => evaluate(`!!document.querySelector('.stop-button') && !document.querySelector('.modal')`), 'external session controls');
+    await evaluate(`document.querySelector('.stop-button').click()`);
+    await waitFor(() => evaluate(`document.querySelector('.modal-actions .primary')?.innerText.includes('Disconnect & save')`), 'safe disconnect confirmation');
+    assert.match(await evaluate(`document.querySelector('.modal-description').innerText`), /browser and tabs stay open/);
+    await evaluate(`document.querySelector('.modal-actions .primary').click()`);
+    await waitFor(() => evaluate(`window.tabline.getState().then(state=>state.status==='idle' && !!state.session?.endedAt)`), 'external timeline saved');
+    assert.ok((await externalBrowser.client.send('Target.getTargets')).targetInfos.some((target) => target.url === `${localUrl}/`), 'UI disconnect must leave the external browser running');
     assert.deepEqual(rendererErrors, [], 'production renderer should have no uncaught errors');
     console.log('PASS: production Electron UI, live tracking, local file import and errors, remote import and local restore, client waiting and network resume, remote timeline updates, and offline state.');
   } finally {
     if (evaluate) await evaluate(`window.tabline.stop()`).catch(() => {});
+    await externalBrowser.stop();
     client?.close();
     child.kill();
     peerNetwork?.stop();

@@ -72,6 +72,9 @@ test('CDP correlates out-of-order responses and rejects pending work on disconne
     const event = new Promise((resolve) => client.once('Target.targetCreated', resolve));
     socket.send(JSON.stringify({ method: 'Target.targetCreated', params: { targetInfo: { targetId: 'new' } } }));
     assert.equal((await event).targetInfo.targetId, 'new');
+    await assert.rejects(client.send('sleeping', {}, undefined, { timeout: 20 }), /timed out/);
+    assert.equal(client.pending.size, 0, 'short probes release their pending requests');
+    assert.equal(client.socket.readyState, 1, 'a sleeping target must not disconnect other tabs');
     await assert.rejects(client.send('wait'), /disconnected/);
     assert.equal(client.pending.size, 0);
   } finally {

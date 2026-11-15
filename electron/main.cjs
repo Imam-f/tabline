@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { detectBrowsers } = require('./browser.cjs');
+const { openDebuggingSettings } = require('./active-browser.cjs');
 const { SessionManager } = require('./session-manager.cjs');
 const { VirtualDesktopResolver } = require('./virtual-desktop.cjs');
 const { NetworkManager } = require('./network.cjs');
@@ -47,6 +48,17 @@ else {
       return result.canceled ? null : result.filePaths[0];
     });
     ipcMain.handle('browser:launch', (_event, options) => options?.mirror ? network.launchMirror(options) : manager.launch(options));
+    ipcMain.handle('browser:debugging-settings', (_event, options) => openDebuggingSettings(options || {}, detectBrowsers()));
+    ipcMain.handle('browser:attach', async (_event, options) => {
+      try { return await manager.attach(options || {}); }
+      catch (error) {
+        if (['DEBUGGING_UNAVAILABLE', 'DEBUGGING_CONNECTION_FAILED'].includes(error.code)) {
+          try { await openDebuggingSettings(options || {}, detectBrowsers()); }
+          catch (setupError) { throw new Error(`${error.message} ${setupError.message}`); }
+        }
+        throw error;
+      }
+    });
     ipcMain.handle('browser:stop', (_event, id) => manager.stop(id));
     ipcMain.handle('session:select', (_event, id) => manager.selectSession(id));
     ipcMain.handle('session:close', (_event, id) => manager.closeSession(id));

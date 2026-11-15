@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('tabline', {
   getBrowsers: () => ipcRenderer.invoke('browsers:list'),
   chooseExecutable: () => ipcRenderer.invoke('browser:choose'),
   launch: (options) => ipcRenderer.invoke('browser:launch', options),
+  attach: (options) => ipcRenderer.invoke('browser:attach', options),
+  openDebuggingSettings: (options) => ipcRenderer.invoke('browser:debugging-settings', options),
   stop: (id) => ipcRenderer.invoke('browser:stop', id),
   selectSession: (id) => ipcRenderer.invoke('session:select', id),
   closeSession: (id) => ipcRenderer.invoke('session:close', id),

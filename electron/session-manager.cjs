@@ -1,6 +1,7 @@
 const { EventEmitter } = require('node:events');
 const { randomUUID } = require('node:crypto');
 const { BrowserController } = require('./browser.cjs');
+const { resolveActiveEndpoint } = require('./active-browser.cjs');
 
 class SessionManager extends EventEmitter {
   constructor(dataDir, extensionPath, configureController = () => {}) {
@@ -58,7 +59,7 @@ class SessionManager extends EventEmitter {
   latestProfileSession() {
     const runtime = this.runtimeStates().map((state) => state.session);
     const saved = this.storage.listSessions();
-    return [...runtime, ...saved].sort((a, b) => b.startedAt - a.startedAt)[0] || null;
+    return [...runtime, ...saved].filter((session) => session.connectionMode !== 'attached').sort((a, b) => b.startedAt - a.startedAt)[0] || null;
   }
 
   async launch(options = {}) {
@@ -105,6 +106,33 @@ class SessionManager extends EventEmitter {
       this.pendingStatus = null;
       this.publish();
       return { ...result, state: this.snapshot() };
+    } catch (error) {
+      this.controllers.delete(sessionId);
+      this.pendingStatus = null;
+      this.lastError = error.message;
+      this.publish();
+      throw error;
+    }
+  }
+
+  async attach(options = {}) {
+    const endpoint = await resolveActiveEndpoint(options);
+    if ([...this.controllers.values()].some((controller) => (controller.trackingEndpoint || controller.client?.url) === endpoint && ['launching', 'live', 'stopping'].includes(controller.status))) {
+      throw new Error('This browser is already being tracked. Select its existing session.');
+    }
+    const controller = this.createController();
+    const sessionId = randomUUID();
+    controller.trackingEndpoint = endpoint;
+    this.controllers.set(sessionId, controller);
+    this.pendingStatus = 'launching';
+    this.lastError = null;
+    this.publish();
+    try {
+      await controller.attach({ ...options, sessionId }, endpoint);
+      this.activeSessionId = sessionId;
+      this.pendingStatus = null;
+      this.publish();
+      return this.snapshot();
     } catch (error) {
       this.controllers.delete(sessionId);
       this.pendingStatus = null;
