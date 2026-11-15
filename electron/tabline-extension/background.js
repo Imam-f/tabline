@@ -1,8 +1,32 @@
-const bridgeOrigin = 'http://127.0.0.1:17637';
-const bridgeUrl = `${bridgeOrigin}/tab-groups`;
+let bridgeOrigin = 'http://127.0.0.1:17637';
+let bridgeUrl = `${bridgeOrigin}/tab-groups`;
 let restoring = false;
 let snapshotSequence = 0;
 const snapshotSource = crypto.randomUUID();
+let syncingFreezing = false;
+
+async function refreshBridge() {
+  try {
+    const saved = await chrome.storage.local.get('tablineBridgeOrigin');
+    if (/^http:\/\/127\.0\.0\.1:\d+$/.test(saved.tablineBridgeOrigin || '')) {
+      bridgeOrigin = saved.tablineBridgeOrigin;
+      bridgeUrl = `${bridgeOrigin}/tab-groups`;
+    }
+  } catch {}
+}
+
+async function syncFreezingSetting() {
+  if (syncingFreezing) return;
+  syncingFreezing = true;
+  try {
+    const saved = await chrome.storage.local.get(['freezingEnabled', 'freezingPending']);
+    if (!saved.freezingPending) return;
+    const response = await fetch(`${bridgeOrigin}/extension/freezing-settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: saved.freezingEnabled !== false }), signal: AbortSignal.timeout(2500) });
+    if (!response.ok) return;
+    const latest = await chrome.storage.local.get('freezingEnabled');
+    if (latest.freezingEnabled === saved.freezingEnabled) await chrome.storage.local.set({ freezingPending: false });
+  } catch {} finally { syncingFreezing = false; }
+}
 
 // Keep events until the bridge acknowledges an exact mapping, including across
 // MV3 worker restarts. Snapshot sequencing never discards creation events.
@@ -192,6 +216,11 @@ chrome.runtime.onInstalled.addListener(() => sendSnapshot());
 chrome.runtime.onStartup.addListener(() => sendSnapshot());
 chrome.alarms?.onAlarm?.addListener((alarm) => { if (alarm.name === 'tabline-group-refresh') sendSnapshot(); });
 chrome.alarms?.create?.('tabline-group-refresh', { periodInMinutes: 1 });
-sendSnapshot();
-checkRestore();
-setInterval(() => { sendSnapshot(); checkRestore(); }, 1000);
+async function refresh() {
+  await refreshBridge();
+  sendSnapshot();
+  checkRestore();
+  syncFreezingSetting();
+}
+refresh();
+setInterval(refresh, 1000);

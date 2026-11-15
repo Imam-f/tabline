@@ -44,6 +44,7 @@ export interface Session {
   recovered?: boolean;
   restoredFromSessionId?: string;
   browserDataDir?: string;
+  connectionMode?: 'attached';
   profileSourceSessionId?: string | null;
   profileCopySkipped?: string[];
   activityHistory?: BrowserActivity[];
@@ -65,6 +66,7 @@ export interface AppState {
 }
 export interface BrowserChoice { id: 'helium' | 'chrome'; name: string; path: string | null }
 export interface LaunchOptions { browser: 'helium' | 'chrome'; executable?: string; url: string; name: string }
+export interface AttachOptions { browser: 'helium' | 'chrome'; executable?: string; name?: string; userDataDir?: string; address?: string }
 export interface SessionSummary { id: string; name: string; startedAt: number; endedAt: number | null; browser: string; tabCount: number; folderId: string | null; order: number | null }
 export interface Folder { id: string; name: string; createdAt: number; parentId: string | null }
 export interface RestoreResult { state: AppState; requested: number; opened: number; skipped: number; failed: number; desktopFailed: number; groupsRestored: boolean; warnings: string[] }
@@ -103,6 +105,8 @@ export interface TablineAPI {
   getBrowsers(): Promise<BrowserChoice[]>;
   chooseExecutable(): Promise<string | null>;
   launch(options: LaunchOptions): Promise<AppState>;
+  attach(options: AttachOptions): Promise<AppState>;
+  openDebuggingSettings(options: AttachOptions): Promise<void>;
   stop(id?: string): Promise<void>;
   selectSession(id: string): Promise<AppState>;
   closeSession(id: string): Promise<AppState>;

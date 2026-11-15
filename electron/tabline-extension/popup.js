@@ -1,7 +1,10 @@
-const bridge = 'http://127.0.0.1:17637';
+let bridge = 'http://127.0.0.1:17637';
 let current;
 let targetId;
 let state;
+let freezingEnabled = true;
+let settingReady = false;
+let pendingSetting = false;
 
 const $ = (id) => document.getElementById(id);
 
@@ -23,7 +26,16 @@ async function tabs(query) {
 }
 
 async function request(path, body) {
-  const response = await fetch(`${bridge}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const saved = await chrome.storage.local.get('tablineBridgeOrigin');
+  if (/^http:\/\/127\.0\.0\.1:\d+$/.test(saved.tablineBridgeOrigin || '')) bridge = saved.tablineBridgeOrigin;
+  let response;
+  try {
+    response = await fetch(`${bridge}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(2500) });
+  } catch {
+    const error = new Error('Tabline is not connected. Start Tabline and launch or track this browser session, then retry.');
+    error.code = 'TABLINE_OFFLINE';
+    throw error;
+  }
   const value = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(value.error || 'Tabline is not connected.');
   return value;
@@ -32,28 +44,82 @@ async function request(path, body) {
 function info(tab, target) { return { tabId: tab.id, targetId: target, windowId: tab.windowId, url: tab.url, title: tab.title }; }
 
 function showError(error) {
+  if (error.code === 'TABLINE_OFFLINE') {
+    state = null;
+    $('status').textContent = 'Tabline is not connected. Start Tabline and launch or track this browser session, then retry. Your freezing preference is saved locally.';
+    $('reconnect').hidden = false;
+    for (const id of ['freeze', 'return', 'whitelist', 'close', 'freeze-all']) $(id).hidden = true;
+    setBusy(false);
+    return;
+  }
   $('error').textContent = error.message || String(error);
   $('error').hidden = false;
 }
 
-function setBusy(value) { document.querySelectorAll('button').forEach((button) => { button.disabled = value; }); }
+function setBusy(value) {
+  document.querySelectorAll('button').forEach((button) => { button.disabled = value || (!state && button.id !== 'reconnect'); });
+  $('disable-freezing').disabled = value || !settingReady;
+  if (!value && !freezingEnabled) {
+    $('freeze').disabled = true;
+    $('freeze-all').disabled = true;
+  }
+}
 
 async function update() {
   current = (await tabs({ active: true, currentWindow: true }))[0];
   if (!current) throw new Error('There is no active tab.');
-  const target = (await targets()).find((item) => item.tabId === current.id);
+  $('title').textContent = current.title || 'Current tab';
+  $('url').textContent = current.url || '';
+  const target = (await targets().catch(() => [])).find((item) => item.tabId === current.id);
   targetId = target?.targetId;
   state = await request('/extension/status', info(current, targetId));
+  if (!pendingSetting && typeof state.freezingEnabled === 'boolean') {
+    freezingEnabled = state.freezingEnabled;
+    await chrome.storage.local.set({ freezingEnabled });
+  }
   $('title').textContent = current.title || 'Current tab';
   $('url').textContent = current.url || '';
   $('status').textContent = state.frozen ? 'This tab is showing a saved screenshot.' : state.freezable ? state.whitelisted ? 'This tab is on the freezer whitelist.' : 'This tab can be frozen into a local snapshot.' : 'This browser page cannot be frozen.';
+  if (!state.frozen && !freezingEnabled) $('status').textContent = pendingSetting ? 'Freezing preference saved. Waiting for Tabline to reconnect.' : 'Freezing is disabled. Your tabs will stay open normally.';
+  $('disable-freezing').checked = !freezingEnabled;
   $('freeze').hidden = state.frozen || !state.freezable;
   $('return').hidden = !state.frozen;
   $('whitelist').hidden = state.frozen || !state.freezable;
   $('whitelist').textContent = state.whitelisted ? 'Remove from whitelist' : 'Whitelist this tab';
   $('close').hidden = false;
   $('freeze-all').hidden = false;
+  $('reconnect').hidden = true;
+  $('error').hidden = true;
+  setBusy(false);
 }
+
+$('reconnect').addEventListener('click', async () => {
+  try { setBusy(true); await update(); }
+  catch (error) { showError(error); }
+  finally { setBusy(false); }
+});
+
+$('disable-freezing').addEventListener('change', async () => {
+  try {
+    setBusy(true);
+    $('error').hidden = true;
+    const enabled = !$('disable-freezing').checked;
+    await chrome.storage.local.set({ freezingEnabled: enabled, freezingPending: true });
+    freezingEnabled = enabled;
+    pendingSetting = true;
+    try {
+      await request('/extension/freezing-settings', { enabled });
+      await chrome.storage.local.set({ freezingPending: false });
+      pendingSetting = false;
+      $('status').textContent = enabled ? 'Freezing is enabled.' : 'Freezing is disabled. Your tabs will stay open normally.';
+    } catch {
+      $('status').textContent = 'Preference saved in this browser. It will apply when Tabline reconnects. If Tabline is already running, restart it to load the updated freezer controls.';
+    }
+  } catch (error) {
+    $('disable-freezing').checked = !freezingEnabled;
+    showError(error);
+  } finally { setBusy(false); }
+});
 
 $('freeze').addEventListener('click', async () => {
   try { setBusy(true); const result = await request('/extension/freeze', info(current, targetId)); if (!result.shortUrl) throw new Error(result.skipped || 'This tab could not be frozen.'); await chromeCall(chrome.tabs.update.bind(chrome.tabs), current.id, { url: result.shortUrl }); window.close(); } catch (error) { setBusy(false); showError(error); }
@@ -84,4 +150,16 @@ $('freeze-all').addEventListener('click', async () => {
   } catch (error) { setBusy(false); showError(error); }
 });
 
-update().catch(showError);
+async function initialize() {
+  try {
+    const saved = await chrome.storage.local.get(['freezingEnabled', 'freezingPending']);
+    freezingEnabled = saved.freezingEnabled !== false;
+    pendingSetting = saved.freezingPending === true;
+    settingReady = true;
+    $('disable-freezing').checked = !freezingEnabled;
+    setBusy(false);
+  } catch (error) { showError(error); }
+  await update().catch(showError);
+}
+
+initialize();

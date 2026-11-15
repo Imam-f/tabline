@@ -9,11 +9,16 @@ class CDP extends EventEmitter {
     this.pending = new Map();
   }
 
-  connect() {
+  connect({ timeout = 15000 } = {}) {
     return new Promise((resolve, reject) => {
       this.socket = new WebSocket(this.url, { maxPayload: 32 * 1024 * 1024 });
-      this.socket.once('open', resolve);
-      this.socket.once('error', reject);
+      const timer = setTimeout(() => {
+        reject(new Error('Debugging connection timed out. Click Allow in your browser and try again.'));
+        this.socket.terminate();
+      }, timeout);
+      this.socket.once('open', () => { clearTimeout(timer); resolve(); });
+      this.socket.once('error', (error) => { clearTimeout(timer); reject(error); });
+      this.socket.once('close', () => { clearTimeout(timer); reject(new Error('Debugging connection closed. Allow debugging in your browser and try again.')); });
       this.socket.on('error', () => {});
       this.socket.on('message', (raw) => {
         let message;

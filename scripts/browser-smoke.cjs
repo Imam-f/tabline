@@ -23,6 +23,7 @@ const waitFor = async (predicate, label, timeout = 20000) => {
   const tempParent = process.env.TABLINE_TEST_TEMP || os.tmpdir();
   const dataDir = fs.mkdtempSync(path.join(tempParent, 'tabline-smoke-'));
   const controller = new BrowserController(dataDir);
+  const attached = new BrowserController(path.join(dataDir, 'attached'));
   const server = http.createServer((request, response) => {
     const name = request.url === '/child' ? 'Child tab' : request.url === '/next' ? 'Next page' : 'Parent tab';
     response.writeHead(200, { 'Content-Type': 'text/html' });
@@ -40,7 +41,7 @@ const waitFor = async (predicate, label, timeout = 20000) => {
         const { sessionId } = await controller.client.send('Target.attachToTarget', { targetId: target.targetId, flatten: true });
         const result = await controller.client.send('Runtime.evaluate', { expression: 'chrome.runtime.getManifest().name', returnByValue: true }, sessionId).catch(() => null);
         await controller.client.send('Target.detachFromTarget', { sessionId }).catch(() => {});
-        if (result?.result?.result?.value === 'Tabline companion') return target;
+        if (result?.result?.value === 'Tabline companion') return target;
       }
       return null;
     }, 'Tabline companion extension'); } catch (error) {
@@ -49,6 +50,33 @@ const waitFor = async (predicate, label, timeout = 20000) => {
     }
     if (companion) assert.ok(companion.url.startsWith('chrome-extension://'), 'Tabline companion extension should be installed in the managed browser');
     const parent = await waitFor(() => controller.session.tabs.find((tab) => tab.title === 'Parent tab'), 'initial tab');
+    await attached.attach({ browser: browser?.id || 'chrome', name: 'Existing browser' }, controller.client.url);
+    assert.equal(attached.session.connectionMode, 'attached');
+    assert.ok(attached.session.tabs.some((tab) => tab.id === parent.id), 'attachment discovers the already open page');
+    await attached.capture(parent.id);
+    assert.ok(attached.session.tabs.find((tab) => tab.id === parent.id).thumbnail?.startsWith('data:image/jpeg;base64,'));
+    await attached.stop();
+    if (companion) {
+      controller.companionTargets.clear();
+      await controller.configureCompanion(companion.targetId);
+      const popup = await controller.client.send('Target.createTarget', { url: new URL('popup.html', companion.url).href });
+      const popupSession = await controller.client.send('Target.attachToTarget', { targetId: popup.targetId, flatten: true });
+      const popupEvaluate = async (expression) => {
+        const result = await controller.client.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, popupSession.sessionId);
+        if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+        return result.result.value;
+      };
+      await waitFor(() => popupEvaluate(`!!document.getElementById('disable-freezing') && !document.getElementById('disable-freezing').disabled && document.getElementById('reconnect').hidden && document.getElementById('title').textContent !== 'Checking this tab...'`), 'companion popup connected to its session bridge');
+      assert.equal(await popupEvaluate(`document.getElementById('error').hidden`), true, 'popup must not show a fetch failure');
+      await popupEvaluate(`document.getElementById('disable-freezing').click()`);
+      await waitFor(() => !controller.freezingEnabled(), 'popup disables freezing in the backend');
+      await waitFor(() => popupEvaluate(`!document.getElementById('disable-freezing').disabled`), 'popup setting saved');
+      await popupEvaluate(`document.getElementById('disable-freezing').click()`);
+      await waitFor(() => controller.freezingEnabled(), 'popup re-enables freezing in the backend');
+      await controller.client.send('Target.closeTarget', { targetId: popup.targetId });
+    }
+    assert.ok((await controller.client.send('Target.getTargets')).targetInfos.some((tab) => tab.targetId === parent.id), 'disconnect must leave the browser and its tabs open');
+    assert.ok(attached.loadSession(attached.session.id).endedAt, 'attachment timeline persists on disconnect');
     await waitFor(() => parent.windowId, 'initial browser window ID');
     await waitFor(() => controller.session.activityHistory?.some((activity) => activity.windows.some((window) => window.tabId === parent.id)), 'active tab snapshot');
     const { sessionId } = await controller.client.send('Target.attachToTarget', { targetId: parent.id, flatten: true });
@@ -84,6 +112,7 @@ const waitFor = async (predicate, label, timeout = 20000) => {
     assert.ok(saved.tabs.find((tab) => tab.id === child.id).thumbnail);
     console.log('PASS: browser launch without automation mode, discovery, opener arrows, JPEG capture, navigation, focus, closure, and session persistence.');
   } finally {
+    await attached.stop();
     await controller.stop();
     clearTimeout(controller.persistTimer);
     await new Promise((resolve) => server.close(resolve));

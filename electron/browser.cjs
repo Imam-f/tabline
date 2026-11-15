@@ -63,7 +63,7 @@ function browserCandidates(platform = process.platform, env = process.env) {
   const pf = env.PROGRAMFILES || 'C:\\Program Files';
   const pfx = env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
   if (platform === 'win32') return {
-    helium: [path.join(local, 'imput', 'Helium', 'Application', 'chrome.exe'), path.join(local, 'Helium', 'Application', 'helium.exe'), path.join(local, 'Helium', 'helium.exe'), path.join(pf, 'Helium', 'Application', 'helium.exe'), path.join(pf, 'Helium', 'helium.exe')],
+    helium: [path.join(local, 'imput', 'Helium', 'Application', 'helium.exe'), path.join(local, 'imput', 'Helium', 'Application', 'chrome.exe'), path.join(local, 'Helium', 'Application', 'helium.exe'), path.join(local, 'Helium', 'helium.exe'), path.join(pf, 'Helium', 'Application', 'helium.exe'), path.join(pf, 'Helium', 'helium.exe')],
     chrome: [path.join(pf, 'Google', 'Chrome', 'Application', 'chrome.exe'), path.join(pfx, 'Google', 'Chrome', 'Application', 'chrome.exe'), path.join(local, 'Google', 'Chrome', 'Application', 'chrome.exe')],
   };
   if (platform === 'darwin') return {
@@ -153,10 +153,12 @@ class BrowserController extends EventEmitter {
     super();
     this.dataDir = dataDir;
     this.freezerFile = path.join(dataDir, 'freezer.json');
+    this.freezingSettingsFile = path.join(dataDir, 'freezing-settings.json');
     this.freezer = this.readFreezer();
     this.status = 'idle';
     this.session = null;
     this.client = null;
+    this.companionTargets = new Set();
     this.process = null;
     this.captureBusy = false;
     this.captureTimers = new Map();
@@ -220,6 +222,17 @@ class BrowserController extends EventEmitter {
     } catch { return { entries: [], whitelist: [] }; }
   }
 
+  freezingEnabled() {
+    try { return readJson(this.freezingSettingsFile, (value) => typeof value?.enabled === 'boolean').enabled; }
+    catch { return true; }
+  }
+
+  setFreezingEnabled(enabled) {
+    if (typeof enabled !== 'boolean') throw new Error('Choose whether freezing is enabled.');
+    writeJson(this.freezingSettingsFile, { enabled }, (value) => typeof value?.enabled === 'boolean');
+    return { freezingEnabled: enabled };
+  }
+
   persistFreezer() {
     try {
       writeJson(this.freezerFile, this.freezer, (item) => Array.isArray(item?.entries) && Array.isArray(item.whitelist));
@@ -249,7 +262,7 @@ class BrowserController extends EventEmitter {
     return jsonFiles(path.join(this.dataDir, 'sessions')).flatMap((name) => {
       try {
         const session = this.readSessionFile(path.join(this.dataDir, 'sessions', name));
-        return [{ id: session.id, name: session.name, startedAt: session.startedAt, endedAt: session.endedAt, browser: session.browser, tabCount: session.tabs.length, folderId: session.folderId || null, order: Number.isInteger(session.order) ? session.order : null }];
+        return [{ id: session.id, name: session.name, startedAt: session.startedAt, endedAt: session.endedAt, browser: session.browser, ...(session.connectionMode ? { connectionMode: session.connectionMode } : {}), tabCount: session.tabs.length, folderId: session.folderId || null, order: Number.isInteger(session.order) ? session.order : null }];
       } catch { return []; }
     }).sort((a, b) => a.folderId === b.folderId ? compareSavedSessions(a, b) : b.startedAt - a.startedAt);
   }
@@ -481,28 +494,7 @@ class BrowserController extends EventEmitter {
       this.explicitOpeners.clear();
       this.snapshotSequences.clear();
       this.session = { id: sessionId, name: options.name?.trim().slice(0, 80) || 'Untitled session', browser, startedAt: Date.now(), endedAt: null, browserDataDir: sessionId, profileSourceSessionId: options.profileSourceSessionId || null, profileCopySkipped, activityHistory: [], tabs: [] };
-      let discoveryReady = false;
-      this.client.on('Target.targetCreated', ({ targetInfo }) => this.onTarget(targetInfo, { created: discoveryReady }));
-      this.client.on('Target.targetInfoChanged', ({ targetInfo }) => this.onTarget(targetInfo));
-      this.client.on('Target.targetDestroyed', ({ targetId }) => {
-        const tab = this.session?.tabs.find((item) => item.id === targetId);
-        if (tab && !tab.closedAt) { tab.closedAt = Date.now(); if (!this.closingBrowser) tab.openAtEnd = false; this.publish(); }
-        clearTimeout(this.captureTimers.get(targetId));
-        this.captureTimers.delete(targetId);
-      });
-      this.client.on('disconnect', () => this.finish());
-      this.status = 'live';
-      await this.client.send('Target.setDiscoverTargets', { discover: true });
-      const { targetInfos } = await this.client.send('Target.getTargets');
-      targetInfos.forEach((info) => this.onTarget(info));
-      discoveryReady = true;
-      this.interval = setInterval(() => this.captureAll(), 60000);
-      this.locationInterval = setInterval(() => this.refreshAllTargetLocations().catch(() => {}), 1000);
-      this.inactivityInterval = setInterval(() => this.checkInactiveTabs().catch(() => {}), 1000);
-      this.activityInterval = setInterval(() => this.refreshActivityFromCdp().catch(() => {}), 1000);
-      await this.refreshAllTargetLocations();
-      this.refreshActivityFromCdp().catch(() => {});
-      this.publish();
+      await this.startTracking();
       return this.snapshot();
     } catch (error) {
       this.client?.close();
@@ -515,8 +507,69 @@ class BrowserController extends EventEmitter {
     }
   }
 
+  async attach(options, endpoint) {
+    this.status = 'launching';
+    this.lastError = null;
+    this.launchCancelled = false;
+    this.closingBrowser = false;
+    this.debugPort = Number(new URL(endpoint).port);
+    this.publish();
+    try {
+      await this.startGroupBridge();
+      this.client = new CDP(endpoint);
+      await this.client.connect({ timeout: 60000 });
+      if (this.launchCancelled) throw new Error('Connection cancelled.');
+      this.session = { id: options.sessionId || randomUUID(), name: options.name?.trim().slice(0, 80) || 'Active browser session', browser: options.browser === 'chrome' ? 'chrome' : 'helium', connectionMode: 'attached', startedAt: Date.now(), endedAt: null, activityHistory: [], tabs: [] };
+      await this.startTracking();
+      return this.snapshot();
+    } catch (error) {
+      this.finish();
+      this.status = 'error';
+      this.lastError = `Could not connect to the active browser. Enable remote debugging and click Allow in your browser, then try again. ${error.message}`;
+      this.publish();
+      const connectionError = new Error(this.lastError);
+      connectionError.code = 'DEBUGGING_CONNECTION_FAILED';
+      throw connectionError;
+    }
+  }
+
+  async startTracking() {
+    this.exactTabTargets.clear();
+    this.pendingTabSources.clear();
+    this.explicitOpeners.clear();
+    this.snapshotSequences.clear();
+    this.lastActivityObservedAt = 0;
+    let discoveryReady = false;
+    this.client.on('Target.targetCreated', ({ targetInfo }) => this.onTarget(targetInfo, { created: discoveryReady }));
+    this.client.on('Target.targetInfoChanged', ({ targetInfo }) => this.onTarget(targetInfo));
+    this.client.on('Target.targetDestroyed', ({ targetId }) => {
+      const tab = this.session?.tabs.find((item) => item.id === targetId);
+      if (tab && !tab.closedAt) { tab.closedAt = Date.now(); if (!this.closingBrowser) tab.openAtEnd = false; this.publish(); }
+      clearTimeout(this.captureTimers.get(targetId));
+      this.captureTimers.delete(targetId);
+    });
+    this.client.on('disconnect', () => this.finish());
+    this.status = 'live';
+    await this.client.send('Target.setDiscoverTargets', { discover: true });
+    const { targetInfos } = await this.client.send('Target.getTargets');
+    if (this.status !== 'live' || !this.client) throw new Error('Browser disconnected while starting tracking.');
+    targetInfos.forEach((info) => this.onTarget(info));
+    discoveryReady = true;
+    this.interval = setInterval(() => this.captureAll(), 60000);
+    this.locationInterval = setInterval(() => this.refreshAllTargetLocations().catch(() => {}), 1000);
+    if (this.session.connectionMode !== 'attached') this.inactivityInterval = setInterval(() => this.checkInactiveTabs().catch(() => {}), 1000);
+    this.activityInterval = setInterval(() => this.refreshActivityFromCdp().catch(() => {}), 1000);
+    await this.refreshAllTargetLocations();
+    this.refreshActivityFromCdp().catch(() => {});
+    this.publish();
+  }
+
   onTarget(info, { created = false } = {}) {
     if (!this.session) return;
+    if (info.type === 'service_worker' && /^chrome-extension:\/\/[^/]+\/background\.js$/.test(info.url || '')) {
+      this.configureCompanion(info.targetId).catch(() => {});
+      return;
+    }
     if (info.type === 'page' && info.url?.startsWith('chrome-extension://')) {
       const index = this.session.tabs.findIndex((item) => item.id === info.targetId);
       if (index >= 0) { this.session.tabs.splice(index, 1); this.publish(); }
@@ -569,6 +622,23 @@ class BrowserController extends EventEmitter {
     }
   }
 
+  async configureCompanion(targetId) {
+    const client = this.client;
+    const origin = this.bridgeOrigin();
+    if (!client || !origin || this.companionTargets.has(targetId)) return;
+    this.companionTargets.add(targetId);
+    let sessionId;
+    try {
+      ({ sessionId } = await client.send('Target.attachToTarget', { targetId, flatten: true }));
+      const result = await client.send('Runtime.evaluate', {
+        expression: `(async () => { if (chrome.runtime.getManifest().name !== 'Tabline companion' || !chrome.storage?.local) return false; await chrome.storage.local.set({ tablineBridgeOrigin: ${JSON.stringify(origin)} }); return true; })()`,
+        awaitPromise: true, returnByValue: true,
+      }, sessionId);
+      if (result.exceptionDetails || result.result?.value !== true) this.companionTargets.delete(targetId);
+    } catch { this.companionTargets.delete(targetId); }
+    finally { if (sessionId) await client.send('Target.detachFromTarget', { sessionId }).catch(() => {}); }
+  }
+
   frozenPage(entry) {
     const screenshot = typeof entry.screenshot === 'string' && entry.screenshot.startsWith('data:image/') ? entry.screenshot : '';
     return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(entry.title || 'Frozen tab')}</title><style>*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#f5f1ea;color:#2b302f;font-family:Inter,Segoe UI,Arial,sans-serif}body{padding:40px 28px 130px}.shell{max-width:1120px;margin:auto}.eyebrow{font-size:11px;letter-spacing:2px;color:#887968;font-weight:700}.heading{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin:10px 0 26px}.heading h1{font-size:clamp(22px,4vw,42px);line-height:1.08;letter-spacing:-1.5px;margin:0;max-width:800px}.url{color:#887968;font-size:13px;word-break:break-all;margin-top:10px}.preview{background:#fff;border:1px solid #e2d9cd;border-radius:16px;padding:12px;box-shadow:0 20px 55px #654d3317}.preview img{display:block;width:100%;height:auto;border-radius:9px}.empty{min-height:300px;display:grid;place-items:center;color:#887968}.return{position:fixed;z-index:2;left:50%;bottom:24px;transform:translateX(-50%);border:1px solid #3f554c;background:#314840;color:#f6f4ed;border-radius:999px;padding:15px 24px;font:600 15px Segoe UI,Arial,sans-serif;box-shadow:0 12px 30px #31484042;cursor:pointer}.return:hover{background:#253a33}.return:disabled{opacity:.6;cursor:wait}@media(max-width:600px){body{padding:24px 14px 112px}.heading{display:block}.url{font-size:11px}.return{width:calc(100% - 28px);bottom:14px}}</style></head><body><main class="shell"><div class="eyebrow">TABLINE SNAPSHOT</div><div class="heading"><div><h1>${escapeHtml(entry.title || 'Frozen tab')}</h1><div class="url">${escapeHtml(entry.originalUrl)}</div></div></div><div class="preview">${screenshot ? `<img src="${screenshot}" alt="Screenshot of ${escapeHtml(entry.title || 'the frozen tab')}">` : '<div class="empty">No screenshot was available for this tab.</div>'}</div></main><button class="return" id="return">Return to original page</button><script>const button=document.getElementById('return');button.addEventListener('click',async()=>{button.disabled=true;button.textContent='Returning...';try{const response=await fetch('/unfreeze/${encodeURIComponent(entry.slug)}',{method:'POST'});if(!response.ok)throw new Error('Unable to restore this tab');const result=await response.json();location.href=result.originalUrl}catch(error){button.disabled=false;button.textContent=error.message}});</script></body></html>`;
@@ -617,6 +687,8 @@ class BrowserController extends EventEmitter {
           response.writeHead(204, headers); response.end();
         } else if (request.url === '/extension/status') {
           sendJson(response, 200, this.freezerStatus(message));
+        } else if (request.url === '/extension/freezing-settings') {
+          sendJson(response, 200, this.setFreezingEnabled(message.enabled));
         } else if (request.url === '/extension/freeze') {
           sendJson(response, 200, await this.freezeTab(message));
         } else if (request.url === '/extension/freeze-all') {
@@ -808,6 +880,7 @@ class BrowserController extends EventEmitter {
   }
 
   async freezeTab(tabInfo, options = {}) {
+    if (!this.freezingEnabled()) throw new Error('Freezing is disabled. Enable it in the Tabline extension to freeze tabs.');
     if (this.status !== 'live' || !this.session) throw new Error('Start a browser session before freezing tabs.');
     const tab = this.tabForExtensionInfo(tabInfo);
     if (!tab || tab.closedAt) throw new Error('This tab is no longer open.');
@@ -819,6 +892,7 @@ class BrowserController extends EventEmitter {
     clearTimeout(this.captureTimers.get(tab.id));
     this.captureTimers.delete(tab.id);
     const screenshot = options.capture === false ? tab.thumbnail || null : await this.capture(tab.id).catch(() => tab.thumbnail || null);
+    if (!this.freezingEnabled()) throw new Error('Freezing is disabled.');
     let entry = currentEntry || this.freezer.entries.find((item) => !item.active && item.targetId === tab.id && item.originalUrl === originalUrl);
     if (!entry) {
       let slug;
@@ -841,6 +915,7 @@ class BrowserController extends EventEmitter {
   }
 
   async freezeTabById(id) {
+    if (this.session?.connectionMode === 'attached') throw new Error('Tab freezing is available in sessions launched by Tabline.');
     const result = await this.freezeTab({ targetId: id });
     if (result.shortUrl) await this.navigateTab(id, result.shortUrl);
     return result;
@@ -885,7 +960,7 @@ class BrowserController extends EventEmitter {
     const entry = this.entryForTab(tab) || this.entryForUrl(tab?.url);
     const originalUrl = entry?.originalUrl || tab?.originalUrl || tab?.url || '';
     const currentUrl = tabInfo.url || tab?.url;
-    return { frozen: !!entry?.active && (tab?.frozen || currentUrl === this.freezerUrl(entry.slug)), whitelisted: this.isWhitelisted(originalUrl), freezable: freezableUrl(originalUrl), slug: entry?.slug || null };
+    return { freezingEnabled: this.freezingEnabled(), frozen: !!entry?.active && (tab?.frozen || currentUrl === this.freezerUrl(entry.slug)), whitelisted: this.isWhitelisted(originalUrl), freezable: freezableUrl(originalUrl), slug: entry?.slug || null };
   }
 
   setWhitelist(tabInfo, enabled) {
@@ -900,6 +975,8 @@ class BrowserController extends EventEmitter {
   }
 
   async freezeAllTabs(tabInfos = [], exclude = null) {
+    if (!this.freezingEnabled()) throw new Error('Freezing is disabled. Enable it in the Tabline extension to freeze tabs.');
+    if (this.session?.connectionMode === 'attached') throw new Error('Tab freezing is available in sessions launched by Tabline.');
     const infos = tabInfos.length ? tabInfos : (this.session?.tabs || []).filter((tab) => !tab.closedAt).map((tab) => ({ targetId: tab.id, tabId: tab.extensionTabId, windowId: tab.extensionWindowId, url: tab.url, title: tab.title }));
     const excludedTargetId = exclude?.targetId;
     const excludedTabId = exclude?.tabId;
@@ -929,7 +1006,7 @@ class BrowserController extends EventEmitter {
   }
 
   async checkInactiveTabs() {
-    if (this.inactivityBusy || this.status !== 'live' || !this.session) return;
+    if (this.inactivityBusy || this.status !== 'live' || !this.session || !this.freezingEnabled()) return;
     this.inactivityBusy = true;
     try {
       const now = Date.now();
@@ -1043,6 +1120,12 @@ class BrowserController extends EventEmitter {
       return;
     }
     if (this.status !== 'live') return;
+    if (this.session?.connectionMode === 'attached') {
+      this.closingBrowser = true;
+      for (const tab of this.session.tabs) if (!tab.closedAt) tab.openAtEnd = true;
+      this.finish();
+      return;
+    }
     const child = this.process;
     await this.refreshAllTargetLocations().catch(() => {});
     this.status = 'stopping';
@@ -1064,6 +1147,7 @@ class BrowserController extends EventEmitter {
   }
 
   finish() {
+    this.companionTargets.clear();
     clearInterval(this.interval);
     clearInterval(this.locationInterval);
     clearInterval(this.inactivityInterval);

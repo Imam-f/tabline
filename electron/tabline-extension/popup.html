@@ -12,6 +12,9 @@
       <h1 id="title">Checking this tab...</h1>
       <p id="url" class="url"></p>
       <p id="status" class="status">Connect to a live Tabline session to manage frozen tabs.</p>
+      <label class="freezing-setting"><input id="disable-freezing" type="checkbox" disabled>Disable freezing</label>
+      <p class="setting-help">Stops automatic and manual freezing in all Tabline sessions on this device. Already frozen tabs can still be restored.</p>
+      <button id="reconnect" class="secondary" hidden>Retry connection</button>
       <button id="freeze" class="primary" hidden>Freeze this tab</button>
       <button id="return" class="primary" hidden>Return to original page</button>
       <button id="whitelist" class="secondary" hidden>Whitelist this tab</button>
