@@ -5,7 +5,7 @@ import {
   FolderPlus, GitBranch, Globe2, Image, Layers3, LayoutList, Maximize2, Monitor,
   Pencil, Plus, Radio, RefreshCw, Search, Settings2, ShieldCheck, Snowflake, Sparkles, Square, Trash2, X, Minus,
 } from 'lucide-react';
-import type { AppState, BrowserChoice, BrowserTab, Folder, NetworkState, Session, SessionSummary } from './types';
+import type { AppState, BrowserChoice, BrowserTab, Folder, LaunchOptions, NetworkState, Session, SessionSummary } from './types';
 import { makeDemo } from './demo';
 import NetworkPanel from './NetworkPanel';
 
@@ -423,6 +423,7 @@ export default function App() {
           </div> : <div className="empty-state"><FolderClock size={35}/><h3>A fresh start.</h3><p>Your browsing sessions are saved automatically as you explore.<br/>Launch a browser to start your first one.</p><button className="button primary" onClick={() => setShowLaunch(true)}><Plus size={16}/>Start a session</button></div>}
         </section> : <>
           {remote && <div className="network-view-banner"><Globe2 size={16}/><strong>{remotePeer?.data?.name || 'Remote instance'}</strong><span>{remotePeer?.connected ? 'Timeline updates automatically · browser runs on that machine' : 'Disconnected · showing the last received timeline'}</span><button className="text-button" onClick={() => setPage('network')}>Network instances <ArrowRight size={13}/></button></div>}
+          {!remote && session?.mirror && <div className="network-view-banner"><Globe2 size={16}/><strong>Remote mirror</strong><span>{state.error || (isLive ? 'Following remote windows, active tabs, and desktop numbers · changes flow to this browser' : 'Mirror ended · session saved')}</span><button className="text-button" onClick={() => setPage('network')}>Network instances <ArrowRight size={13}/></button></div>}
           <div className="stats-grid">
             <Stat icon={<Layers3 size={18}/>} label="Total tabs" value={session?.tabs.length || 0} detail="a trail of curiosity" color="purple"/>
             <Stat icon={<Monitor size={18}/>} label="Open right now" value={openTabs} detail={<><span className={`tiny-dot ${openTabs ? 'green' : 'gray'}`}/>{openTabs ? 'still exploring' : 'ready when you are'}</>} color="green"/>
@@ -446,6 +447,7 @@ export default function App() {
       </main>
     </div>
     {showLaunch && <LaunchDialog
+      network={network}
       onClose={() => setShowLaunch(false)}
       running={false}
       onDemo={exploreDemo}
@@ -705,7 +707,7 @@ function Modal({ title, subtitle, children, onClose }: { title: string; subtitle
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" ref={dialogRef}><div className="modal-top"><span className="modal-logo"><Layers3 size={23}/></span><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={20}/></button></div><h2 id="modal-title">{title}</h2><p className="modal-subtitle">{subtitle}</p>{children}</div></div>;
 }
 
-function LaunchDialog({ onClose, onLaunch, onDemo, running }: { onClose: () => void; onLaunch: (options: { browser: 'helium' | 'chrome'; executable?: string; url: string; name: string }) => Promise<void>; onDemo: () => void; running: boolean }) {
+function LaunchDialog({ onClose, onLaunch, onDemo, running, network }: { onClose: () => void; onLaunch: (options: LaunchOptions) => Promise<void>; onDemo: () => void; running: boolean; network: NetworkState | null }) {
   const preferences = useRef<LaunchPreferences | null>(null);
   if (!preferences.current) preferences.current = readLaunchPreferences();
   const [browsers, setBrowsers] = useState<BrowserChoice[]>([]);
@@ -718,18 +720,24 @@ function LaunchDialog({ onClose, onLaunch, onDemo, running }: { onClose: () => v
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [advanced, setAdvanced] = useState(false);
+  const [mode, setMode] = useState<'local' | 'mirror'>('local');
+  const [source, setSource] = useState('');
+  const sources = network?.config.mode !== 'off' ? network?.peers.filter((peer) => peer.connected).flatMap((peer) => (peer.data?.state.sessions || []).filter((runtime) => runtime.status === 'live' && !runtime.session.mirror).map((runtime) => ({ key: `${peer.id}/${runtime.session.id}`, peerId: peer.id, sessionId: runtime.session.id, label: `${peer.data?.name} · ${runtime.session.name}` }))) || [] : [];
+  const selectedSource = sources.find((item) => item.key === source);
   useEffect(() => { api?.getBrowsers().then((items) => { setBrowsers(items); const saved = preferences.current; const savedBrowser = saved?.browser || 'helium'; const savedUsable = !!saved?.executables?.[savedBrowser] || !!items.find((item) => item.id === savedBrowser)?.path; if (!savedUsable) setBrowser(items.find((item) => item.id === 'helium')?.path ? 'helium' : 'chrome'); }).catch((err) => setError(err.message)); }, []);
   return <Modal title="Where will curiosity take you?" subtitle="Start a fresh browser session. We’ll connect the dots." onClose={busy ? () => {} : onClose}>
     {!api ? <div className="desktop-notice"><Monitor size={19}/><div><strong>You’re in the web preview.</strong><p>Browser launching is available in the Electron desktop app. Run <code>npm run dev</code> from this project to connect a local browser.</p></div></div> : running ? <div className="desktop-notice"><Radio size={19}/><div><strong>A session is already running.</strong><p>End your current session before starting a new one.</p></div></div> : null}
-    <form onSubmit={async (event) => { event.preventDefault(); setBusy(true); setError(''); try { writeLaunchPreferences({ browser, executables }); await onLaunch({ browser, executable: executable || undefined, url, name }); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to launch the browser.'); } finally { setBusy(false); } }}>
+    <form onSubmit={async (event) => { event.preventDefault(); if (mode === 'mirror' && !selectedSource) { setError('Choose a connected remote session.'); return; } setBusy(true); setError(''); try { writeLaunchPreferences({ browser, executables }); await onLaunch({ browser, executable: executable || undefined, url, name, ...(mode === 'mirror' && selectedSource ? { mirror: { peerId: selectedSource.peerId, sessionId: selectedSource.sessionId } } : {}) }); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to launch the browser.'); } finally { setBusy(false); } }}>
+      <label className="field-label" htmlFor="session-mode">SESSION MODE</label><select id="session-mode" className="form-input" value={mode} onChange={(event) => setMode(event.target.value as 'local' | 'mirror')}><option value="local">Local session</option><option value="mirror">Remote mirror</option></select>
+      {mode === 'mirror' && <><label className="field-label" htmlFor="mirror-source">REMOTE SESSION</label><select id="mirror-source" className="form-input" value={source} onChange={(event) => setSource(event.target.value)}><option value="">Choose a live remote session</option>{sources.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select><p className="modal-description">Follow remote windows, tabs, navigation, and active tabs in a dedicated local browser. Windows use matching virtual desktop numbers (1 → 1, 2 → 2). Create the needed local desktops first. Changes flow from remote to local; connection loss pauses the mirror.</p>{!sources.length && <p className="form-error">Connect an instance with a live session in Network instances first.</p>}</>}
       <label className="field-label">YOUR BROWSER</label><div className="browser-options">{(['helium', 'chrome'] as const).map((item) => <button type="button" key={item} className={`browser-option ${browser === item ? 'selected' : ''}`} onClick={() => setBrowser(item)}><span className={`browser-logo ${item}`}>{item === 'helium' ? <span>He</span> : <Globe2 size={24}/>}</span><span><strong>{item === 'helium' ? 'Helium' : 'Google Chrome'}</strong><small>{api ? browsers.find((b) => b.id === item)?.path ? 'Detected on your device' : 'Choose an executable' : 'Chromium-powered'}</small></span><span className="radio-circle">{browser === item && <span/>}</span></button>)}</div>
       <label className="field-label" htmlFor="session-name">SESSION NAME</label><input id="session-name" className="form-input" value={name} onChange={(event) => setName(event.target.value)} placeholder="A new rabbit hole" maxLength={80}/>
-      <label className="field-label" htmlFor="start-url">STARTING PAGE</label><input id="start-url" className="form-input" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://www.google.com"/>
+      {mode === 'local' && <><label className="field-label" htmlFor="start-url">STARTING PAGE</label><input id="start-url" className="form-input" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://www.google.com"/></>}
       <button type="button" className="advanced-toggle" onClick={() => setAdvanced(!advanced)}><Settings2 size={14}/>Browser executable <ChevronDown size={13} className={advanced ? 'rotate' : ''}/></button>
       {advanced && <div className="executable-field"><input className="form-input" aria-label="Browser executable path" value={executable} onChange={(event) => setExecutable(event.target.value)} placeholder={browsers.find((item) => item.id === browser)?.path || 'Full path to browser executable'}/><button type="button" className="button secondary" disabled={!api} onClick={async () => { const target = browser; try { const result = await api!.chooseExecutable(); if (result) setExecutable(result, target); } catch (err) { setError(String(err)); } }}><FolderOpen size={16}/>Browse</button></div>}
       <div className="profile-note"><ShieldCheck size={15}/><span>A dedicated browser profile. A localhost-only connection.<br/>Your usual browser stays right where it is.</span></div>
       {error && <div className="form-error" role="alert">{error}</div>}
-      <button type="submit" className="button primary full-width launch-submit" disabled={!api || running || busy}>{busy ? <RefreshCw size={16} className="spinning"/> : <ArrowUpRight size={17}/>} {busy ? 'Connecting your browser…' : `Launch ${browser === 'helium' ? 'Helium' : 'Chrome'}`}</button>
+      <button type="submit" className="button primary full-width launch-submit" disabled={!api || running || busy || (mode === 'mirror' && !selectedSource)}>{busy ? <RefreshCw size={16} className="spinning"/> : <ArrowUpRight size={17}/>} {busy ? 'Connecting your browser…' : mode === 'mirror' ? 'Start remote mirror' : `Launch ${browser === 'helium' ? 'Helium' : 'Chrome'}`}</button>
       {!running && <button type="button" className="text-button demo-link" onClick={onDemo}>Just looking? Explore a demo <ArrowRight size={14}/></button>}
     </form>
   </Modal>;

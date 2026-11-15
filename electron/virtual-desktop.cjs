@@ -8,6 +8,17 @@ class VirtualDesktopResolver {
     this.child = null;
     this.pending = new Map();
     this.nextId = 1;
+    this.desktopIds = [];
+  }
+
+  index(desktopId) {
+    const index = this.desktopIds.indexOf(desktopId);
+    return index < 0 ? null : index;
+  }
+
+  moveIndex(windowId, processId, bounds, index) {
+    if (!Number.isInteger(index) || index < 0) return Promise.resolve(false);
+    return this.request('move-index', windowId, processId, bounds, index, false);
   }
 
   resolve(windowId, processId, bounds) {
@@ -53,7 +64,8 @@ class VirtualDesktopResolver {
       if (!request) return;
       clearTimeout(request.timer);
       this.pending.delete(message.id);
-      request.resolve(request.action === 'move' ? !!message.moved : message.desktopId || 'unknown');
+      if (Array.isArray(message.desktopIds)) this.desktopIds = message.desktopIds;
+      request.resolve(request.action.startsWith('move') ? !!message.moved : message.desktopId || 'unknown');
     });
     child.once('error', () => this.onExit(child));
     child.once('exit', () => this.onExit(child));

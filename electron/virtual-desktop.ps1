@@ -187,12 +187,24 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     try {
         $request = $line | ConvertFrom-Json
         $bounds = $request.bounds
-        if ($request.action -eq 'move') {
+        $desktopIds = @()
+        $desktopBytes = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops' -Name VirtualDesktopIDs -ErrorAction SilentlyContinue).VirtualDesktopIDs
+        for ($offset = 0; $desktopBytes -and $offset + 16 -le $desktopBytes.Length; $offset += 16) {
+            $desktopIds += (New-Object Guid (,[byte[]]$desktopBytes[$offset..($offset + 15)])).ToString('D')
+        }
+        if ($request.action -eq 'move-index') {
+            $index = [int]$request.desktopId
+            $moved = $false
+            if ($index -ge 0 -and $index -lt $desktopIds.Count) {
+                $moved = [TablineVirtualDesktop]::Move([string]$request.windowId, [int]$request.processId, [int]$bounds.left, [int]$bounds.top, [int]$bounds.width, [int]$bounds.height, $desktopIds[$index])
+            }
+            @{ id = $request.id; moved = $moved; desktopIds = @($desktopIds) } | ConvertTo-Json -Compress
+        } elseif ($request.action -eq 'move') {
             $moved = [TablineVirtualDesktop]::Move([string]$request.windowId, [int]$request.processId, [int]$bounds.left, [int]$bounds.top, [int]$bounds.width, [int]$bounds.height, [string]$request.desktopId)
             @{ id = $request.id; moved = $moved } | ConvertTo-Json -Compress
         } else {
             $desktopId = [TablineVirtualDesktop]::Resolve([string]$request.windowId, [int]$request.processId, [int]$bounds.left, [int]$bounds.top, [int]$bounds.width, [int]$bounds.height)
-            @{ id = $request.id; desktopId = $desktopId } | ConvertTo-Json -Compress
+            @{ id = $request.id; desktopId = $desktopId; desktopIds = @($desktopIds) } | ConvertTo-Json -Compress
         }
     } catch {
         @{ id = $request.id; desktopId = $null; moved = $false } | ConvertTo-Json -Compress

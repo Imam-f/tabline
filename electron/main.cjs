@@ -27,6 +27,8 @@ else {
     if (process.platform === 'win32') virtualDesktopResolver = new VirtualDesktopResolver();
     manager = new SessionManager(path.join(app.getPath('userData'), 'browser-data'), extensionPath, (controller) => {
       if (!virtualDesktopResolver) return;
+      controller.desktopIndexResolver = (id) => virtualDesktopResolver.index(id);
+      controller.desktopIndexMover = (windowId, bounds, processId, index) => virtualDesktopResolver.moveIndex(windowId, processId, bounds, index);
       controller.desktopResolver = (windowId, bounds, processId) => virtualDesktopResolver.resolve(windowId, processId, bounds);
       controller.desktopMover = (windowId, bounds, processId, desktopId) => virtualDesktopResolver.move(windowId, processId, bounds, desktopId);
     });
@@ -44,7 +46,7 @@ else {
       const result = await dialog.showOpenDialog(window, { title: 'Choose Helium or Chrome executable', properties: ['openFile'], ...(process.platform === 'win32' ? { filters: [{ name: 'Browser executable', extensions: ['exe'] }] } : {}) });
       return result.canceled ? null : result.filePaths[0];
     });
-    ipcMain.handle('browser:launch', (_event, options) => manager.launch(options));
+    ipcMain.handle('browser:launch', (_event, options) => options?.mirror ? network.launchMirror(options) : manager.launch(options));
     ipcMain.handle('browser:stop', (_event, id) => manager.stop(id));
     ipcMain.handle('session:select', (_event, id) => manager.selectSession(id));
     ipcMain.handle('session:close', (_event, id) => manager.closeSession(id));

@@ -41,6 +41,30 @@ async function configure(network, mode, peers = []) {
   return `http://127.0.0.1:${network.config.port}`;
 }
 
+test('remote mirrors launch locally, pause on disconnect, and resume only their original source', async (t) => {
+  const remote = fixture(t, 'source');
+  const local = fixture(t, 'mirror');
+  const url = await configure(remote.network, 'host');
+  await configure(local.network, 'client', [{ id: 'remote', url, token }]);
+  await until(() => local.network.peers.get('remote')?.connected);
+  const controller = { status: 'live', session: { id: 'local' }, publish() {} };
+  local.manager.controllers = new Map([['local', controller]]);
+  local.manager.launch = async (options) => { assert.equal(options.url, 'about:blank'); return { activeSessionId: 'local' }; };
+  await local.network.launchMirror({ browser: 'chrome', mirror: { peerId: 'remote', sessionId: remote.id } });
+  assert.equal(controller.session.mirror.instanceId, remote.network.instanceId);
+  assert.equal(controller.mirrorPlan.sourceSessionId, remote.id);
+  remote.network.stop();
+  await until(() => controller.mirrorPlan === null);
+  assert.match(controller.lastError, /paused/);
+  await remote.network.start();
+  await until(() => controller.mirrorPlan?.sourceSessionId === remote.id);
+  local.network.updateMirrors('remote', { ...remote.network.sharedState(), instanceId: 'replacement-instance' });
+  assert.equal(controller.mirrorPlan, null, 'a replacement instance must not take over the mirror');
+  remote.session.mirror = { peerId: 'other' };
+  await until(() => local.network.peers.get('remote')?.data?.state.session.mirror);
+  await assert.rejects(local.network.launchMirror({ mirror: { peerId: 'remote', sessionId: remote.id } }), /cannot be used/);
+});
+
 test('multiple instances track independent live tabs, reconnect, and resume data on the client machine', async (t) => {
   const host = fixture(t, 'host');
   const client = fixture(t, 'client');

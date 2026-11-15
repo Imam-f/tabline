@@ -118,7 +118,7 @@ function restoreUrl(input) {
   try { const url = new URL(input); return ['http:', 'https:'].includes(url.protocol) ? url.href : null; } catch { return null; }
 }
 
-function buildRestorePlan(session, at = null) {
+function buildRestorePlan(session, at = null, limit = 250) {
   const hasOpenSnapshot = session.tabs.some((tab) => typeof tab.openAtEnd === 'boolean');
   let candidates = Number.isFinite(at)
     ? session.tabs.filter((tab) => tab.openedAt <= at && (!tab.closedAt || tab.closedAt > at || (at >= session.endedAt && tab.openAtEnd !== false)))
@@ -128,7 +128,7 @@ function buildRestorePlan(session, at = null) {
   if (!candidates.length && !hasOpenSnapshot) candidates = session.tabs;
   const windows = new Map();
   let skipped = 0;
-  for (const tab of candidates.slice(0, 250)) {
+  for (const tab of candidates.slice(0, limit)) {
     const url = restoreUrl(tab.originalUrl || tab.url);
     if (!url) { skipped++; continue; }
     const sourceWindowId = String(tab.extensionWindowId ?? tab.windowId ?? 'default');
@@ -565,6 +565,9 @@ class BrowserController extends EventEmitter {
     this.groupBridge = http.createServer(async (request, response) => {
       if (request.method === 'OPTIONS') { response.writeHead(204, headers); response.end(); return; }
       try {
+        if (request.method === 'GET' && request.url === '/mirror') {
+          sendJson(response, this.mirrorPlan && this.status === 'live' ? 200 : 204, this.mirrorPlan || null); return;
+        }
         if (request.method === 'GET' && request.url === '/restore') {
           if (!this.pendingRestore || this.pendingRestore.delivered) { response.writeHead(204, headers); response.end(); return; }
           this.pendingRestore.delivered = true;
@@ -583,7 +586,10 @@ class BrowserController extends EventEmitter {
         if (request.method === 'POST' && unfreezeMatch) { sendJson(response, 200, this.unfreezeSlug(decodeURIComponent(unfreezeMatch[1]))); return; }
         if (request.method !== 'POST') { response.writeHead(404, headers); response.end(); return; }
         const message = await readJson(request);
-        if (request.url === '/restore-result') {
+        if (request.url === '/mirror-result') {
+          await this.applyMirrorDesktops(message);
+          sendJson(response, 200, { ok: true });
+        } else if (request.url === '/restore-result') {
           this.restoreResolve?.(message);
           this.restoreResolve = null;
           response.writeHead(204, headers); response.end();
@@ -855,7 +861,7 @@ class BrowserController extends EventEmitter {
   }
 
   async checkInactiveTabs() {
-    if (this.inactivityBusy || this.status !== 'live' || !this.session) return;
+    if (this.session?.mirror || this.inactivityBusy || this.status !== 'live' || !this.session) return;
     this.inactivityBusy = true;
     try {
       const now = Date.now();
@@ -877,6 +883,21 @@ class BrowserController extends EventEmitter {
     } finally { this.inactivityBusy = false; }
   }
 
+  async applyMirrorDesktops(message) {
+    if (!this.mirrorPlan || this.status !== 'live') return;
+    for (const mapping of message.windows || []) {
+      const source = this.mirrorPlan.windows.find((item) => item.sourceWindowId === mapping.sourceWindowId);
+      const tab = this.session.tabs.find((item) => !item.closedAt && item.extensionWindowId === mapping.extensionWindowId);
+      if (!tab || !Number.isInteger(source?.desktopIndex) || !this.desktopIndexMover) continue;
+      await this.refreshTargetLocation(tab);
+      if (tab.desktopIndex === source.desktopIndex) continue;
+      const moved = await this.desktopIndexMover(tab.windowId, tab.windowBounds, this.process?.pid, source.desktopIndex);
+      if (!moved) this.lastError = `Remote mirror: local desktop ${source.desktopIndex + 1} is unavailable or Windows could not move the window.`;
+    }
+    if (message.error) this.lastError = `Remote mirror: ${message.error}`;
+    this.publish();
+  }
+
   async refreshTargetLocation(tab) {
     if (!this.client || !tab || this.status !== 'live') return;
     try {
@@ -886,6 +907,7 @@ class BrowserController extends EventEmitter {
       tab.windowId = windowId;
       tab.windowBounds = location.bounds || null;
       tab.desktopId = await this.getDesktopId(tab.windowId, location.bounds);
+      tab.desktopIndex = this.desktopIndexResolver?.(tab.desktopId) ?? null;
       if (!tab.windowHistory) tab.windowHistory = [];
       const last = tab.windowHistory.at(-1);
       if (!last || last.windowId !== tab.windowId || last.desktopId !== tab.desktopId) {

@@ -122,6 +122,7 @@ class NetworkManager extends EventEmitter {
     this.server?.close();
     this.server?.closeAllConnections();
     this.server = null;
+    for (const peer of this.config.peers) this.updateMirrors(peer.id, null);
     this.peers.clear();
   }
 
@@ -179,12 +180,44 @@ class NetworkManager extends EventEmitter {
         if (data.instanceId === this.instanceId) throw new Error('This address points to this instance.');
         if (!data.state || !Array.isArray(data.state.sessions) || !Array.isArray(data.savedSessions) || typeof data.name !== 'string') throw new Error('This address is not a compatible Tabline instance.');
         this.peers.set(peer.id, { connected: true, error: null, data, lastSeen: Date.now() });
+        this.updateMirrors(peer.id, data);
         this.publish();
       }).catch((error) => {
         if (generation !== this.generation) return;
+        this.updateMirrors(peer.id, null);
         this.peers.set(peer.id, { connected: false, error: error.message, data: previous?.data || null, lastSeen: previous?.lastSeen || null });
         this.publish();
       });
+    }
+  }
+
+  async launchMirror(options) {
+    if (this.config.mode === 'off') throw new Error('Enable network mode and connect a remote instance first.');
+    const { peerId, sessionId } = options.mirror || {};
+    const peer = this.peers.get(peerId);
+    const source = peer?.data?.state.sessions.find((item) => item.session.id === sessionId);
+    if (!peer?.connected || source?.status !== 'live') throw new Error('Choose a connected, live remote session.');
+    if (source.session.mirror) throw new Error('A mirrored session cannot be used as a mirror source.');
+    const state = await this.manager.launch({ ...options, url: 'about:blank' });
+    const controller = this.manager.controllers.get(state.activeSessionId);
+    controller.session.mirror = { peerId, sessionId, instanceId: peer.data.instanceId };
+    this.updateMirrors(peerId, this.peers.get(peerId)?.connected ? this.peers.get(peerId).data : null);
+    return this.manager.snapshot();
+  }
+
+  updateMirrors(peerId, data) {
+    for (const controller of this.manager.controllers?.values() || []) {
+      const mirror = controller.session?.mirror;
+      if (controller.status !== 'live' || mirror?.peerId !== peerId) continue;
+      const source = data?.state.sessions.find((item) => item.session.id === mirror.sessionId);
+      if (!data || data.instanceId !== mirror.instanceId || !source || source.status !== 'live' || source.session.mirror) {
+        controller.mirrorPlan = null;
+        controller.lastError = 'Remote mirror paused. Waiting for its source session to reconnect.';
+      } else {
+        controller.mirrorPlan = require('./remote-mirror.cjs').buildMirrorPlan(source.session);
+        controller.lastError = null;
+      }
+      controller.publish();
     }
   }
 

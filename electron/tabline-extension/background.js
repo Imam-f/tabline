@@ -47,7 +47,7 @@ async function sendSnapshot(tabIds = null) {
       try { const group = await new Promise((resolve, reject) => chrome.tabGroups.get(item.groupId, (value) => chrome.runtime.lastError ? reject(chrome.runtime.lastError) : resolve(value))); Object.assign(item, { groupTitle: group.title || null, groupColor: group.color || null, groupCollapsed: !!group.collapsed }); } catch {}
     }
   }
-  fetch(bridgeUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabs: payload, focusedWindowId: [...focusedWindows][0] ?? null, sequence, source: snapshotSource }) }).catch(() => {});
+  await fetch(bridgeUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabs: payload, focusedWindowId: [...focusedWindows][0] ?? null, sequence, source: snapshotSource }) }).catch(() => {});
 }
 
 function callChrome(method, ...args) {
@@ -119,6 +119,75 @@ async function checkRestore() {
   } catch {} finally { restoring = false; }
 }
 
+let mirroring = false;
+async function checkMirror() {
+  if (mirroring || restoring) return;
+  mirroring = true;
+  let mappings = [];
+  try {
+    const response = await fetch(`${bridgeOrigin}/mirror`);
+    if (response.status !== 200) return;
+    const plan = await response.json();
+    const saved = (await chrome.storage.session.get('mirror')).mirror;
+    const state = saved?.source === plan.sourceSessionId ? saved : { source: plan.sourceSessionId, tabs: {}, windows: {}, focus: null };
+    const persist = () => chrome.storage.session.set({ mirror: state });
+    const currentTabs = await queryTabs();
+    const currentWindows = await queryWindows();
+    const existing = new Map(currentTabs.map((tab) => [tab.id, tab]));
+    const used = new Set();
+    for (const source of plan.windows) {
+      let windowId = state.windows[source.sourceWindowId];
+      if (!currentWindows.some((window) => window.id === windowId)) {
+        // Reuse the launch window only before any source has been mapped.
+        const initial = Object.keys(state.windows).length === 0 && currentWindows[0];
+        const created = initial || await callChrome(chrome.windows.create.bind(chrome.windows), { url: 'about:blank', focused: false });
+        windowId = created.id;
+        state.windows[source.sourceWindowId] = windowId;
+        await persist();
+      }
+      mappings.push({ sourceWindowId: source.sourceWindowId, extensionWindowId: windowId });
+      for (let index = 0; index < source.tabs.length; index++) {
+        const sourceTab = source.tabs[index];
+        let tab = existing.get(state.tabs[sourceTab.sourceId]);
+        if (!tab) {
+          tab = await callChrome(chrome.tabs.create.bind(chrome.tabs), { windowId, url: sourceTab.url, pinned: sourceTab.pinned, active: false });
+          state.tabs[sourceTab.sourceId] = tab.id;
+          await persist();
+        }
+        const update = {};
+        if (tab.url !== sourceTab.url && tab.pendingUrl !== sourceTab.url) update.url = sourceTab.url;
+        if (tab.pinned !== sourceTab.pinned) update.pinned = sourceTab.pinned;
+        if (Object.keys(update).length) await callChrome(chrome.tabs.update.bind(chrome.tabs), tab.id, update);
+        if (tab.windowId !== windowId || tab.index !== index) await callChrome(chrome.tabs.move.bind(chrome.tabs), tab.id, { windowId, index });
+        used.add(tab.id);
+      }
+      const active = source.tabs.find((tab) => tab.active);
+      if (active) await callChrome(chrome.tabs.update.bind(chrome.tabs), state.tabs[active.sourceId], { active: true });
+    }
+    // Keep a blank parking tab when the source has no portable web tabs, so the
+    // dedicated browser remains available for subsequent remote changes.
+    if (!used.size) {
+      const parking = currentTabs.find((tab) => tab.url === 'about:blank') || await callChrome(chrome.tabs.create.bind(chrome.tabs), { url: 'about:blank' });
+      used.add(parking.id);
+    }
+    const unwanted = (await queryTabs()).filter((tab) => !used.has(tab.id)).map((tab) => tab.id);
+    if (unwanted.length) await callChrome(chrome.tabs.remove.bind(chrome.tabs), unwanted);
+    const wantedSources = new Set(plan.windows.map((window) => window.sourceWindowId));
+    for (const key of Object.keys(state.windows)) if (!wantedSources.has(key)) delete state.windows[key];
+    const wantedTabs = new Set(plan.windows.flatMap((window) => window.tabs.map((tab) => tab.sourceId)));
+    for (const key of Object.keys(state.tabs)) if (!wantedTabs.has(key)) delete state.tabs[key];
+    const focused = plan.windows.find((window) => window.focused);
+    const focusKey = focused ? `${focused.sourceWindowId}:${focused.tabs.find((tab) => tab.active)?.sourceId}` : null;
+    if (focused && focusKey !== state.focus) await callChrome(chrome.windows.update.bind(chrome.windows), state.windows[focused.sourceWindowId], { focused: true });
+    state.focus = focusKey;
+    await persist();
+    await sendSnapshot();
+    await fetch(`${bridgeOrigin}/mirror-result`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ windows: mappings }) });
+  } catch (error) {
+    await fetch(`${bridgeOrigin}/mirror-result`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ windows: mappings, error: error.message }) }).catch(() => {});
+  } finally { mirroring = false; }
+}
+
 chrome.tabs.onCreated.addListener(() => sendSnapshot());
 chrome.tabs.onRemoved.addListener(() => sendSnapshot());
 chrome.tabs.onAttached.addListener(() => sendSnapshot());
@@ -138,4 +207,4 @@ chrome.alarms?.onAlarm?.addListener((alarm) => { if (alarm.name === 'tabline-gro
 chrome.alarms?.create?.('tabline-group-refresh', { periodInMinutes: 1 });
 sendSnapshot();
 checkRestore();
-setInterval(() => { sendSnapshot(); checkRestore(); }, 1000);
+setInterval(() => { sendSnapshot(); checkRestore(); checkMirror(); }, 1000);

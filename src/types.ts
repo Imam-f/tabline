@@ -10,6 +10,7 @@ export interface BrowserTab {
   openerId: string | null;
   windowId: string | null;
   desktopId: string;
+  desktopIndex?: number | null;
   windowBounds?: { left: number; top: number; width: number; height: number; windowState?: string } | null;
   windowHistory: Array<{ windowId: string; desktopId: string; at: number }>;
   extensionTabId?: number | null;
@@ -42,6 +43,7 @@ export interface Session {
   savedAt?: number;
   recovered?: boolean;
   restoredFromSessionId?: string;
+  mirror?: { peerId: string; sessionId: string; instanceId: string };
   browserDataDir?: string;
   profileSourceSessionId?: string | null;
   profileCopySkipped?: string[];
@@ -63,7 +65,7 @@ export interface AppState {
   sessions: RuntimeSessionState[];
 }
 export interface BrowserChoice { id: 'helium' | 'chrome'; name: string; path: string | null }
-export interface LaunchOptions { browser: 'helium' | 'chrome'; executable?: string; url: string; name: string }
+export interface LaunchOptions { browser: 'helium' | 'chrome'; executable?: string; url: string; name: string; mirror?: { peerId: string; sessionId: string } }
 export interface SessionSummary { id: string; name: string; startedAt: number; endedAt: number | null; browser: string; tabCount: number; folderId: string | null; order: number | null }
 export interface Folder { id: string; name: string; createdAt: number; parentId: string | null }
 export interface RestoreResult { state: AppState; requested: number; opened: number; skipped: number; failed: number; desktopFailed: number; groupsRestored: boolean; warnings: string[] }
