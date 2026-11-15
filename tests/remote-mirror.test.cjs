@@ -6,6 +6,7 @@ const { buildMirrorPlan } = require('../electron/remote-mirror.cjs');
 const { BrowserController } = require('../electron/browser.cjs');
 const { PassThrough } = require('node:stream');
 const { loadCompanion } = require('../electron/extension-loader.cjs');
+const { MirrorRoom } = require('../electron/mirror-room.cjs');
 
 test('extension loading uses the pipe and handles fragmented protocol responses', async () => {
   const input = new PassThrough();
@@ -107,7 +108,7 @@ test('mirror reconciles navigation, tab moves, active tabs and removals across p
   };
   const source = fs.readFileSync(require.resolve('../electron/tabline-extension/background.js'), 'utf8');
   const createWorker = () => {
-    const context = vm.createContext({ chrome, bridgeOrigin: 'http://localhost', restoring: false,
+    const context = vm.createContext({ chrome, URL, crypto: require('node:crypto').webcrypto, bridgeOrigin: 'http://localhost', restoring: false,
       queryTabs: async () => [...tabs.values()].map((tab) => ({ ...tab })),
       queryWindows: async () => [...windows].map((id) => ({ id })), sendSnapshot: async () => {},
       fetch: async (url) => ({ status: url.endsWith('/mirror') ? 200 : 204, json: async () => plan }),
@@ -134,4 +135,55 @@ test('mirror reconciles navigation, tab moves, active tabs and removals across p
   assert.equal(tabs.get(aId).windowId, saved.mirror.windows.w2);
   assert.equal(tabs.get(aId).url, 'https://changed.example');
   assert.equal(tabs.get(aId).pinned, true);
+});
+
+test('two-way mirroring retains user edits made while a remote layout is being applied', async () => {
+  const room = new MirrorRoom({ sourceSessionId: 'source', windows: [{ sourceWindowId: 'w', tabs: [{ sourceId: 'a', url: 'https://a.example/', index: 0, pinned: false, active: true }] }] });
+  const tabs = new Map([[1, { id: 1, windowId: 1, url: 'about:blank', index: 0 }]]);
+  let saved = {};
+  let nextId = 10;
+  let cycles = 0;
+  let updates = 0;
+  const callback = (fn) => (...args) => { const done = args.pop(); done(fn(...args)); };
+  const chrome = {
+    runtime: {}, storage: { session: { get: async () => structuredClone(saved), set: async (value) => { saved = structuredClone(value); } } },
+    tabs: {
+      create: callback((options) => { const tab = { ...options, id: nextId++, index: tabs.size }; tabs.set(tab.id, tab); return tab; }),
+      update: callback((id, options) => { Object.assign(tabs.get(id), options); return tabs.get(id); }),
+      move: callback((id, options) => { Object.assign(tabs.get(id), options); return tabs.get(id); }),
+      remove: callback((ids) => { for (const id of ids) tabs.delete(id); }),
+    }, windows: { update: callback(() => {}) },
+  };
+  const source = fs.readFileSync(require.resolve('../electron/tabline-extension/background.js'), 'utf8');
+  const context = vm.createContext({ chrome, URL, crypto: require('node:crypto').webcrypto, bridgeOrigin: 'http://localhost', restoring: false,
+    queryTabs: async () => [...tabs.values()].map((tab) => ({ ...tab })),
+    queryWindows: async () => [{ id: 1, focused: true }],
+    sendSnapshot: async () => {
+      // These actions happen after reconciliation but before its acknowledgement.
+      cycles++;
+      if (cycles === 1) {
+        const a = [...tabs.values()][0];
+        a.url = 'https://user-navigation.example/';
+        tabs.set(100, { id: 100, windowId: 1, url: 'https://user-tab.example/', index: 1, active: false });
+      }
+      if (cycles === 2) tabs.delete(saved.mirror.tabs.a);
+    },
+    fetch: async (url, options) => {
+      if (url.endsWith('/mirror-sync')) {
+        const { base, observed } = JSON.parse(options.body);
+        const result = room.sync(base, observed);
+        if (updates++ === 0) tabs.get(100).url = 'https://during-network.example/';
+        return { ok: true, json: async () => result };
+      }
+      return { status: 200, json: async () => url.endsWith('/mirror-result') ? { desktops: {} } : room.snapshot() };
+    },
+  });
+  vm.runInContext(source.slice(source.indexOf('function callChrome('), source.indexOf('async function executeRestore(')) + source.slice(source.indexOf('let mirroring = false;'), source.indexOf('chrome.tabs.onCreated')), context);
+  await vm.runInContext('checkMirror()', context);
+  await vm.runInContext('checkMirror()', context);
+  assert.equal(room.snapshot().windows[0].tabs.length, 2, 'new tabs created during apply must reach the source');
+  assert.equal(room.snapshot().windows[0].tabs.find((tab) => tab.sourceId === 'a').url, 'https://user-navigation.example/');
+  await vm.runInContext('checkMirror()', context);
+  assert.equal(room.snapshot().windows[0].tabs.length, 1, 'closing during apply must not resurrect the tab');
+  assert.equal(room.snapshot().windows[0].tabs[0].url, 'https://during-network.example/', 'edits during a network round trip must also reach the source');
 });

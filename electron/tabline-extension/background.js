@@ -127,7 +127,7 @@ async function sendSnapshot(tabIds = null) {
       try { const group = await new Promise((resolve, reject) => chrome.tabGroups.get(item.groupId, (value) => chrome.runtime.lastError ? reject(chrome.runtime.lastError) : resolve(value))); Object.assign(item, { groupTitle: group.title || null, groupColor: group.color || null, groupCollapsed: !!group.collapsed }); } catch {}
     }
   }
-  await fetch(bridgeUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tabs: payload, focusedWindowId: [...focusedWindows][0] ?? null, sequence, source: snapshotSource }) }).catch(() => {});
+  await fetch(bridgeUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mirrorProtocol: 2, tabs: payload, focusedWindowId: [...focusedWindows][0] ?? null, sequence, source: snapshotSource }) }).catch(() => {});
 }
 
 function callChrome(method, ...args) {
@@ -200,6 +200,27 @@ async function checkRestore() {
 }
 
 let mirroring = false;
+async function mirrorObservation(state) {
+  const tabs = (await queryTabs()).filter((tab) => tab.id !== state.parkingId && !tab.url?.startsWith('chrome-extension://'));
+  const windows = await queryWindows();
+  const observed = { windows: [] };
+  for (const window of windows) {
+    const members = tabs.filter((tab) => tab.windowId === window.id);
+    if (!members.length) continue;
+    let sourceWindowId = Object.keys(state.windows).find((key) => state.windows[key] === window.id);
+    if (!sourceWindowId) { sourceWindowId = `${state.actor}:window:${window.id}`; state.windows[sourceWindowId] = window.id; }
+    observed.windows.push({ sourceWindowId, extensionWindowId: window.id, desktopIndex: state.desktops?.[sourceWindowId] ?? null, focused: !!window.focused, tabs: members.map((tab) => {
+      let sourceId = Object.keys(state.tabs).find((key) => state.tabs[key] === tab.id);
+      if (!sourceId) { sourceId = `${state.actor}:tab:${tab.id}`; state.tabs[sourceId] = tab.id; }
+      const candidate = tab.pendingUrl || tab.url || 'about:blank';
+      let url = 'about:blank';
+      try { const parsed = new URL(candidate); if (['http:', 'https:'].includes(parsed.protocol)) url = parsed.href; } catch {}
+      return { sourceId, url, pinned: !!tab.pinned, active: !!tab.active, index: tab.index };
+    }) });
+  }
+  return observed;
+}
+
 async function checkMirror() {
   if (mirroring || restoring) return;
   mirroring = true;
@@ -207,10 +228,39 @@ async function checkMirror() {
   try {
     const response = await fetch(`${bridgeOrigin}/mirror`);
     if (response.status !== 200) return;
-    const plan = await response.json();
+    let plan = await response.json();
     const saved = (await chrome.storage.session.get('mirror')).mirror;
-    const state = saved?.source === plan.sourceSessionId ? saved : { source: plan.sourceSessionId, tabs: {}, windows: {}, focus: null };
+    const sourceKey = plan.roomId || plan.sourceSessionId;
+    const state = saved?.source === sourceKey ? saved : { source: sourceKey, actor: crypto.randomUUID(), tabs: {}, windows: {}, focus: null };
     const persist = () => chrome.storage.session.set({ mirror: state });
+    if (plan.twoWay) {
+      // The source already has these tabs. Bind them instead of replacing them.
+      if (plan.adoptExisting && !state.baseline) {
+        const targets = await targetMap();
+        const tabs = await queryTabs();
+        for (const window of plan.windows) for (const tab of window.tabs) {
+          const existing = tabs.find((item) => targets.get(item.id) === tab.sourceId);
+          if (existing) { state.tabs[tab.sourceId] = existing.id; state.windows[window.sourceWindowId] = existing.windowId; }
+        }
+        state.baseline = plan;
+      }
+      if (state.baseline) {
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const observed = await mirrorObservation(state);
+          await persist();
+          const sync = await fetch(`${bridgeOrigin}/mirror-sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base: state.baseline, observed }) });
+          const result = await sync.json();
+          if (!sync.ok) throw new Error(result.error || 'Two-way synchronization failed.');
+          plan = result;
+          state.baseline = observed;
+          await persist();
+          // Include edits made during the network round trip before applying
+          // its response; otherwise an in-flight tab closure could be undone.
+          if (JSON.stringify(await mirrorObservation(state)) === JSON.stringify(observed)) break;
+          if (attempt === 3) return;
+        }
+      }
+    }
     const currentTabs = await queryTabs();
     const currentWindows = await queryWindows();
     const existing = new Map(currentTabs.map((tab) => [tab.id, tab]));
@@ -249,6 +299,7 @@ async function checkMirror() {
     if (!used.size) {
       const parking = currentTabs.find((tab) => tab.url === 'about:blank') || await callChrome(chrome.tabs.create.bind(chrome.tabs), { url: 'about:blank' });
       used.add(parking.id);
+      state.parkingId = parking.id;
     }
     const unwanted = (await queryTabs()).filter((tab) => !used.has(tab.id)).map((tab) => tab.id);
     if (unwanted.length) await callChrome(chrome.tabs.remove.bind(chrome.tabs), unwanted);
@@ -262,7 +313,20 @@ async function checkMirror() {
     state.focus = focusKey;
     await persist();
     await sendSnapshot();
-    await fetch(`${bridgeOrigin}/mirror-result`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ windows: mappings }) });
+    const applied = await fetch(`${bridgeOrigin}/mirror-result`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ windows: mappings }) });
+    if (plan.twoWay) {
+      state.desktops = (await applied.json()).desktops;
+      const actualWindows = await queryWindows();
+      // Record what we applied, not a fresh tab snapshot: a user can create,
+      // navigate, or close a tab while reconciliation is in flight. Sampling
+      // those edits into the baseline would silently swallow them.
+      state.baseline = { windows: plan.windows.map((window) => ({ ...window,
+        desktopIndex: state.desktops?.[window.sourceWindowId] ?? null,
+        focused: !!actualWindows.find((item) => item.id === state.windows[window.sourceWindowId])?.focused,
+        tabs: window.tabs.map((tab, index) => ({ ...tab, index })),
+      })) };
+      await persist();
+    }
   } catch (error) {
     await fetch(`${bridgeOrigin}/mirror-result`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ windows: mappings, error: error.message }) }).catch(() => {});
   } finally { mirroring = false; }

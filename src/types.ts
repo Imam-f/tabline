@@ -44,7 +44,8 @@ export interface Session {
   savedAt?: number;
   recovered?: boolean;
   restoredFromSessionId?: string;
-  mirror?: { peerId: string; sessionId: string; instanceId: string };
+  mirror?: { peerId: string; sessionId: string; instanceId: string; twoWay?: boolean };
+  twoWayMirror?: boolean;
   browserDataDir?: string;
   connectionMode?: 'attached';
   profileSourceSessionId?: string | null;
@@ -85,7 +86,7 @@ export interface NetworkPeer {
   connected: boolean;
   error: string | null;
   lastSeen?: number | null;
-  data: { instanceId: string; name: string; mode: NetworkConfig['mode']; restoring: boolean; state: AppState; savedSessions: SessionSummary[] } | null;
+  data: { instanceId: string; name: string; mode: NetworkConfig['mode']; mirrorProtocol?: number; restoring: boolean; state: AppState; savedSessions: SessionSummary[] } | null;
 }
 export interface NetworkState {
   config: NetworkConfig;

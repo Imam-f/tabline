@@ -27,6 +27,7 @@ function fixture(t, name) {
   const session = { id, name, browser: 'chrome', startedAt: 100, endedAt: null, tabs: [{ id: `${name}-tab`, title: name, url: 'https://example.com' }] };
   const calls = [];
   const manager = {
+    controllers: new Map([[id, { status: 'live', session, companionMirrorProtocol: 2, lastCompanionSnapshotAt: Date.now(), publish() {} }]]),
     snapshot: () => ({ status: 'live', session, sessions: [{ status: 'live', session, debugPort: 12345 }], debugPort: 12345 }),
     listSessions: () => [{ id, name, tabCount: 1 }],
     restoreSession: async (sessionId, options) => { assert.equal(sessionId, id, 'restore must use data owned by the receiving instance'); calls.push({ sessionId, options }); return { opened: 1, skipped: 0, failed: 0, warnings: [] }; },
@@ -53,6 +54,12 @@ test('remote mirrors launch locally, pause on disconnect, and resume only their 
   await local.network.launchMirror({ browser: 'helium', mirror: { peerId: 'remote', sessionId: remote.id } });
   assert.equal(controller.session.mirror.instanceId, remote.network.instanceId);
   assert.equal(controller.mirrorPlan.sourceSessionId, remote.id);
+  const base = structuredClone(controller.mirrorPlan);
+  const edited = structuredClone(base);
+  edited.windows[0].tabs[0].url = 'https://edited-locally.example/';
+  const synchronized = await controller.mirrorSync({ base, observed: edited });
+  assert.equal(synchronized.windows[0].tabs[0].url, 'https://edited-locally.example/');
+  assert.equal(remote.manager.controllers.get(remote.id).mirrorPlan.windows[0].tabs[0].url, 'https://edited-locally.example/');
   remote.network.stop();
   await until(() => controller.mirrorPlan === null);
   assert.match(controller.lastError, /paused/);
@@ -63,6 +70,27 @@ test('remote mirrors launch locally, pause on disconnect, and resume only their 
   remote.session.mirror = { peerId: 'other' };
   await until(() => local.network.peers.get('remote')?.data?.state.session.mirror);
   await assert.rejects(local.network.launchMirror({ mirror: { peerId: 'remote', sessionId: remote.id } }), /cannot be used/);
+});
+
+test('two-way mirror operations require authentication, a live source and a valid connection', async (t) => {
+  const source = fixture(t, 'source');
+  const url = await configure(source.network, 'host');
+  const routes = ['/v1/mirror/connect', '/v1/mirror/sync', '/v1/mirror/disconnect'];
+  for (const route of routes) {
+    assert.equal((await fetch(`${url}${route}`, { method: 'POST', body: '{}' })).status, 401);
+    assert.equal((await fetch(`${url}${route}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, Origin: 'https://example.com' }, body: '{}' })).status, 401);
+  }
+  const post = (route, body) => fetch(`${url}/v1/mirror/${route}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+  assert.equal((await post('connect', { sessionId: randomUUID() })).status, 400);
+  const controller = source.manager.controllers.get(source.id);
+  controller.companionMirrorProtocol = 1;
+  assert.match((await (await post('connect', { sessionId: source.id })).json()).error, /needs an update/);
+  controller.companionMirrorProtocol = 2;
+  const connection = await (await post('connect', { sessionId: source.id })).json();
+  assert.equal((await post('sync', { sessionId: source.id, roomId: connection.roomId, clientId: randomUUID(), base: connection.plan, observed: connection.plan })).status, 400);
+  assert.equal((await post('disconnect', { sessionId: source.id, roomId: connection.roomId, clientId: connection.clientId })).status, 200);
+  assert.equal(controller.mirrorRoom, null);
+  assert.equal(controller.mirrorPlan, null);
 });
 
 test('multiple instances track independent live tabs, reconnect, and resume data on the client machine', async (t) => {

@@ -5,6 +5,7 @@ const https = require('node:https');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { MirrorRoom } = require('./mirror-room.cjs');
 
 const SESSION_ID = /^[a-f0-9-]{36}$/;
 const MAX_RESPONSE = 64 * 1024 * 1024;
@@ -39,7 +40,7 @@ function requestPeer(peer, route, body) {
         } catch { reject(new Error('The instance returned an invalid response.')); }
       });
     });
-    const timeout = setTimeout(() => request.destroy(new Error('Instance did not respond.')), data ? 90000 : 5000);
+    const timeout = setTimeout(() => request.destroy(new Error('Instance did not respond.')), data && route === '/v1/restore' ? 90000 : 5000);
     request.on('close', () => clearTimeout(timeout));
     request.on('error', reject);
     request.end(data);
@@ -129,7 +130,7 @@ class NetworkManager extends EventEmitter {
 
   sharedState() {
     const state = this.manager.snapshot();
-    return { instanceId: this.instanceId, name: this.config.name, mode: this.config.mode, restoring: this.restoring, state: { ...state, debugPort: null, sessions: state.sessions.map((runtime) => ({ ...runtime, debugPort: null })) }, savedSessions: this.manager.listSessions() };
+    return { instanceId: this.instanceId, name: this.config.name, mode: this.config.mode, mirrorProtocol: 2, restoring: this.restoring, state: { ...state, debugPort: null, sessions: state.sessions.map((runtime) => ({ ...runtime, debugPort: null })) }, savedSessions: this.manager.listSessions() };
   }
 
   async handle(req, res) {
@@ -138,6 +139,52 @@ class NetworkManager extends EventEmitter {
     const expected = Buffer.from(`Bearer ${this.config.token}`);
     if (req.headers.origin || supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) { reply(401, { error: 'Connection token was rejected.' }); return; }
     try {
+      if (req.method === 'POST' && ['/v1/mirror/connect', '/v1/mirror/sync', '/v1/mirror/disconnect'].includes(req.url)) {
+        let body = '';
+        for await (const chunk of req) {
+          body += chunk;
+          if (Buffer.byteLength(body) > 2 * 1024 * 1024) { reply(413, { error: 'Mirror update is too large.' }); return; }
+        }
+        const message = JSON.parse(body);
+        if (!SESSION_ID.test(message.sessionId || '')) throw new Error('Invalid mirror session.');
+        const controller = this.manager.controllers?.get(message.sessionId);
+        if (!controller || controller.status !== 'live' || controller.session.mirror) throw new Error('The source session is not available for two-way mirroring.');
+        if (req.url === '/v1/mirror/connect') {
+          if (controller.companionMirrorProtocol !== 2 || !controller.lastCompanionSnapshotAt || Date.now() - controller.lastCompanionSnapshotAt > 15000) throw new Error('The source browser companion needs an update or is disconnected. Restart its session with the updated Tabline app.');
+          if (!controller.mirrorRoom) {
+            const room = new MirrorRoom(require('./remote-mirror.cjs').buildMirrorPlan(controller.session));
+            controller.mirrorRoom = room;
+            controller.session.twoWayMirror = true;
+            controller.mirrorPlan = room.snapshot();
+            controller.mirrorSync = async ({ base, observed }) => {
+              controller.mirrorPlan = room.sync(base, observed);
+              controller.publish();
+              return controller.mirrorPlan;
+            };
+          }
+          const clientId = randomUUID();
+          controller.mirrorRoom.clients.add(clientId);
+          controller.publish();
+          reply(200, { roomId: controller.mirrorRoom.id, clientId, plan: controller.mirrorRoom.snapshot() });
+        } else {
+          const room = controller.mirrorRoom;
+          if (!room || room.id !== message.roomId || !room.clients.has(message.clientId)) throw new Error('Mirror connection expired. Start a new remote mirror.');
+          if (req.url === '/v1/mirror/disconnect') {
+            room.clients.delete(message.clientId);
+            if (!room.clients.size) {
+              controller.mirrorRoom = null; controller.mirrorPlan = null; controller.mirrorSync = null;
+              controller.session.twoWayMirror = false;
+              controller.publish();
+            }
+            reply(200, { ok: true });
+          } else {
+            controller.mirrorPlan = room.sync(message.base, message.observed);
+            controller.publish();
+            reply(200, controller.mirrorPlan);
+          }
+        }
+        return;
+      }
       if (req.method === 'GET' && req.url === '/v1/state') { reply(200, this.sharedState()); return; }
       if (req.method === 'GET' && req.url.startsWith('/v1/sessions/')) {
         const sessionId = req.url.slice('/v1/sessions/'.length);
@@ -199,13 +246,34 @@ class NetworkManager extends EventEmitter {
     const source = peer?.data?.state.sessions.find((item) => item.session.id === sessionId);
     if (!peer?.connected || source?.status !== 'live') throw new Error('Choose a connected, live remote session.');
     if (source.session.mirror) throw new Error('A mirrored session cannot be used as a mirror source.');
+    if (peer.data.mirrorProtocol !== 2) throw new Error('Update Tabline on the remote machine to enable two-way mirroring.');
     const browsers = this.getBrowsers();
     const available = browsers.map((item) => ({ ...item, path: options.mirrorExecutables?.[item.id] || item.path })).filter((item) => item.path);
     const browser = available.find((item) => item.id === source.session.browser) || available[0];
     if (!browser) throw new Error('Install Helium or Chrome on this machine to mirror a remote session.');
-    const state = await this.manager.launch({ ...options, browser: browser.id, executable: browser.path, url: 'about:blank' });
+    const remote = this.config.peers.find((item) => item.id === peerId);
+    const connection = await requestPeer(remote, '/v1/mirror/connect', { sessionId });
+    let state;
+    try { state = await this.manager.launch({ ...options, browser: browser.id, executable: browser.path, url: 'about:blank' }); }
+    catch (error) { await requestPeer(remote, '/v1/mirror/disconnect', { sessionId, roomId: connection.roomId, clientId: connection.clientId }).catch(() => {}); throw error; }
     const controller = this.manager.controllers.get(state.activeSessionId);
-    controller.session.mirror = { peerId, sessionId, instanceId: peer.data.instanceId };
+    controller.session.mirror = { peerId, sessionId, instanceId: peer.data.instanceId, twoWay: true };
+    controller.mirrorPlan = connection.plan;
+    controller.mirrorSync = async ({ base, observed }) => {
+      if (this.config.mode === 'off') throw new Error('Networking is disabled. Two-way mirror is paused.');
+      const currentPeer = this.peers.get(peerId);
+      const currentRemote = this.config.peers.find((item) => item.id === peerId);
+      if (!currentRemote || !currentPeer?.connected || currentPeer.data.instanceId !== peer.data.instanceId) throw new Error('Remote mirror is disconnected. Local edits will sync after reconnection.');
+      const plan = await requestPeer(currentRemote, '/v1/mirror/sync', { sessionId, roomId: connection.roomId, clientId: connection.clientId, base, observed });
+      controller.mirrorPlan = plan;
+      return plan;
+    };
+    let disconnected = false;
+    controller.on?.('change', () => {
+      if (disconnected || !['idle', 'error'].includes(controller.status)) return;
+      disconnected = true;
+      void requestPeer(remote, '/v1/mirror/disconnect', { sessionId, roomId: connection.roomId, clientId: connection.clientId }).catch(() => {});
+    });
     this.updateMirrors(peerId, this.peers.get(peerId)?.connected ? this.peers.get(peerId).data : null);
     try { await controller.waitForMirror?.(); }
     catch (error) { await controller.stop(); throw error; }
@@ -218,10 +286,12 @@ class NetworkManager extends EventEmitter {
       if (controller.status !== 'live' || mirror?.peerId !== peerId) continue;
       const source = data?.state.sessions.find((item) => item.session.id === mirror.sessionId);
       if (!data || data.instanceId !== mirror.instanceId || !source || source.status !== 'live' || source.session.mirror) {
+        if (controller.mirrorPlan) controller.pausedMirrorPlan = controller.mirrorPlan;
         controller.mirrorPlan = null;
         controller.lastError = 'Remote mirror paused. Waiting for its source session to reconnect.';
       } else {
-        controller.mirrorPlan = require('./remote-mirror.cjs').buildMirrorPlan(source.session);
+        if (!mirror.twoWay) controller.mirrorPlan = require('./remote-mirror.cjs').buildMirrorPlan(source.session);
+        else if (!controller.mirrorPlan) controller.mirrorPlan = controller.pausedMirrorPlan || null;
         if (controller.lastError?.startsWith('Remote mirror paused.')) controller.lastError = null;
       }
       controller.publish();

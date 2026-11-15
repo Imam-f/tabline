@@ -455,14 +455,14 @@ class BrowserController extends EventEmitter {
         let code = fs.readFileSync(full, 'utf8').replaceAll('http://127.0.0.1:17637', extensionOrigin);
         // A cloned profile may remember the previous session's bridge. A mirror
         // has an embedded address and must never switch back to that stale one.
-        if (options.mirror && file === 'background.js') code = code.replace('await refreshBridge();', '');
+        if (file === 'background.js') code = code.replace('await refreshBridge();', '');
         fs.writeFileSync(full, code);
       }
       // Port 0 (and --enable-automation) puts Chrome in automation mode, which
       // displays an infobar and can prevent Google account sign-in.
       const debugPort = await availableDebugPort();
-      const loadOverPipe = browser === 'chrome' && !!options.mirror;
-      this.mirrorCompanionManaged = !!options.mirror;
+      const loadOverPipe = browser === 'chrome';
+      this.mirrorCompanionManaged = true;
       const child = spawn(executable, [
         `--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1',
         `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check',
@@ -677,7 +677,7 @@ class BrowserController extends EventEmitter {
       if (request.method === 'OPTIONS') { response.writeHead(204, headers); response.end(); return; }
       try {
         if (request.method === 'GET' && request.url === '/mirror') {
-          sendJson(response, this.mirrorPlan && this.status === 'live' ? 200 : 204, this.mirrorPlan || null); return;
+          sendJson(response, this.mirrorPlan && this.status === 'live' ? 200 : 204, this.mirrorPlan ? { ...this.mirrorPlan, adoptExisting: !!this.mirrorRoom } : null); return;
         }
         if (request.method === 'GET' && request.url === '/restore') {
           if (!this.pendingRestore || this.pendingRestore.delivered) { response.writeHead(204, headers); response.end(); return; }
@@ -697,9 +697,16 @@ class BrowserController extends EventEmitter {
         if (request.method === 'POST' && unfreezeMatch) { sendJson(response, 200, this.unfreezeSlug(decodeURIComponent(unfreezeMatch[1]))); return; }
         if (request.method !== 'POST') { response.writeHead(404, headers); response.end(); return; }
         const message = await readJson(request);
-        if (request.url === '/mirror-result') {
+        if (request.url === '/mirror-sync') {
+          if (!this.mirrorSync || !this.mirrorPlan) throw new Error('Two-way mirror is paused.');
+          for (const window of message.observed?.windows || []) {
+            const tab = this.session.tabs.find((item) => !item.closedAt && item.extensionWindowId === window.extensionWindowId);
+            if (tab && Number.isInteger(tab.desktopIndex)) window.desktopIndex = tab.desktopIndex;
+          }
+          sendJson(response, 200, await this.mirrorSync(message));
+        } else if (request.url === '/mirror-result') {
           await this.applyMirrorDesktops(message);
-          sendJson(response, 200, { ok: true });
+          sendJson(response, 200, { ok: true, desktops: Object.fromEntries((message.windows || []).map((window) => [window.sourceWindowId, this.session.tabs.find((tab) => !tab.closedAt && tab.extensionWindowId === window.extensionWindowId)?.desktopIndex ?? null])) });
         } else if (request.url === '/restore-result') {
           this.restoreResolve?.(message);
           this.restoreResolve = null;
@@ -782,6 +789,7 @@ class BrowserController extends EventEmitter {
 
   onTabSnapshot(message) {
     if (!this.session || !Array.isArray(message.tabs)) return;
+    if (message.mirrorProtocol === 2) this.companionMirrorProtocol = 2;
     const source = typeof message.source === 'string' ? message.source : 'legacy';
     if (Number.isInteger(message.sequence)) {
       if (message.sequence <= (this.snapshotSequences.get(source) || 0)) return;
@@ -1036,7 +1044,7 @@ class BrowserController extends EventEmitter {
   }
 
   async checkInactiveTabs() {
-    if (this.session?.mirror || this.inactivityBusy || this.status !== 'live' || !this.session || !this.freezingEnabled()) return;
+    if (this.session?.mirror || this.mirrorRoom || this.inactivityBusy || this.status !== 'live' || !this.session || !this.freezingEnabled()) return;
     this.inactivityBusy = true;
     try {
       const now = Date.now();
@@ -1077,6 +1085,7 @@ class BrowserController extends EventEmitter {
       await this.refreshTargetLocation(tab);
       if (tab.desktopIndex === source.desktopIndex) continue;
       const moved = await this.desktopIndexMover(tab.windowId, tab.windowBounds, this.process?.pid, source.desktopIndex);
+      if (moved) await this.refreshTargetLocation(tab);
       if (!moved) this.lastError = `Remote mirror: local desktop ${source.desktopIndex + 1} is unavailable or Windows could not move the window.`;
     }
     if (!message.error) this.lastMirrorAppliedAt = Date.now();
