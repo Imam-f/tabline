@@ -66,7 +66,9 @@ async function freePort() {
     await waitFor(() => evaluate(`!!document.querySelector('.modal')`), 'launcher dialog');
     assert.equal(await evaluate(`typeof window.tabline.attach`), 'function');
     assert.equal(await evaluate(`typeof window.tabline.openDebuggingSettings`), 'function');
-    await evaluate(`document.querySelector('.session-mode-options button:last-child').click()`);
+    await evaluate(`[...document.querySelectorAll('.session-mode-options button')].find(button=>button.textContent==='Remote mirror').click()`);
+    await waitFor(() => evaluate(`!!document.querySelector('#mirror-source') && !document.querySelector('.browser-options') && !document.querySelector('.advanced-toggle')`), 'mirror mode without browser picker');
+    await evaluate(`[...document.querySelectorAll('.session-mode-options button')].find(button=>button.textContent==='Track active session').click()`);
     await waitFor(() => evaluate(`!!document.querySelector('.debugging-setup') && !document.querySelector('#start-url')`), 'track active session mode');
     assert.match(await evaluate(`document.querySelector('.debugging-setup').innerText`), /click Allow/);
     await evaluate(`document.querySelector('.session-mode-options button:first-child').click()`);
@@ -175,7 +177,7 @@ async function freePort() {
     await externalBrowser.launch({ browser: externalChoice.id, executable: externalChoice.path, url: localUrl, name: 'External browser fixture' });
     await evaluate(`document.querySelector('.page-heading .primary').click()`);
     await waitFor(() => evaluate(`!!document.querySelector('.session-mode-options')`), 'new session menu for external browser');
-    await evaluate(`document.querySelector('.session-mode-options button:last-child').click()`);
+    await evaluate(`[...document.querySelectorAll('.session-mode-options button')].find(button=>button.textContent==='Track active session').click()`);
     await evaluate(`document.querySelector('.advanced-toggle').click()`);
     await evaluate(`(() => { const input=document.querySelector('#debugging-address'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(externalBrowser.client.url)}); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
     await delay(100);

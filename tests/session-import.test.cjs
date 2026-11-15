@@ -19,6 +19,7 @@ function fixture() {
   child.groupTitle = 'Research';
   child.groupColor = 'blue';
   child.tabIndex = 1;
+  child.desktopIndex = 3;
   child.windowHistory = [{ windowId: '1', desktopId: 'desktop', at: 200 }];
   child.groupHistory = [{ groupId: 3, title: 'Research', color: 'blue', at: 300 }];
   session.activityHistory = [{ at: 450, focusedWindowId: '1', windows: [{ windowId: '1', tabId: 'child' }] }];
@@ -46,7 +47,7 @@ test('imports persist independent copies and preserve timeline, thumbnails, grou
   assert.equal(source.tabs[1].closedAt, null, 'import must not mutate the source');
   assert.equal(first.tabs[0].openAtEnd, false);
   assert.equal(first.tabs[1].openAtEnd, true);
-  for (const key of ['navigations', 'windowHistory', 'groupHistory', 'thumbnail', 'groupId', 'groupTitle', 'tabIndex']) assert.deepEqual(first.tabs[1][key], source.tabs[1][key]);
+  for (const key of ['navigations', 'windowHistory', 'groupHistory', 'thumbnail', 'groupId', 'groupTitle', 'tabIndex', 'desktopIndex']) assert.deepEqual(first.tabs[1][key], source.tabs[1][key]);
   assert.deepEqual(first.activityHistory, source.activityHistory);
   assert.equal(first.tabs[1].openerId, 'parent');
   for (const key of ['browserDataDir', 'profileSourceSessionId', 'restoredFromSessionId', 'folderId', 'order']) assert.equal(Object.hasOwn(first, key), false);

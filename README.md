@@ -4,7 +4,7 @@ A local-first Electron app that turns your Helium or Chrome browsing session int
 
 See [GitHub Releases](https://github.com/Imam-f/tabline/releases) for downloads and the changelog.
 
-The current release, **0.1.8**, adds crash recovery for saved progress, optional monitoring of multiple Tabline machines, and saved-session resume on a client machine. Helium and Chrome now remember their executable paths independently when switching browsers. Network sharing is off by default.
+The current release, **0.1.9**, adds two-way remote browser mirroring, tracking for already-open browsers, local and remote session imports, more reliable tab-source tracking, and horizontal and vertical timeline zoom. Mirror mode automatically chooses the local browser and synchronizes windows, tabs, navigation, active tabs, and relative Windows desktop numbers. Update both machines and restart browser sessions before creating a two-way mirror. Network sharing is off by default.
 
 ## Screenshots
 
