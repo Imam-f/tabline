@@ -105,7 +105,11 @@ test('background worker retries the saved preference when Tabline reconnects', a
   const applied = [];
   const event = { addListener() {} };
   const chrome = {
-    storage: { local: { get: async () => ({ ...saved }), set: async (value) => Object.assign(saved, value) } },
+    storage: {
+      local: { get: async () => ({ ...saved }), set: async (value) => Object.assign(saved, value) },
+      session: { get: async () => ({}), set: async () => {} },
+    },
+    webNavigation: { onCreatedNavigationTarget: event },
     debugger: { getTargets: (callback) => callback([]) },
     tabs: { query: () => Promise.resolve([]) },
     windows: { getAll: () => Promise.resolve([]), onFocusChanged: event },
