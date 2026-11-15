@@ -67,7 +67,7 @@ export interface AppState {
   sessions: RuntimeSessionState[];
 }
 export interface BrowserChoice { id: 'helium' | 'chrome'; name: string; path: string | null }
-export interface LaunchOptions { browser: 'helium' | 'chrome'; executable?: string; url: string; name: string; mirror?: { peerId: string; sessionId: string } }
+export interface LaunchOptions { browser?: 'helium' | 'chrome'; executable?: string; url: string; name: string; mirror?: { peerId: string; sessionId: string }; mirrorExecutables?: Partial<Record<'helium' | 'chrome', string>> }
 export interface AttachOptions { browser: 'helium' | 'chrome'; executable?: string; name?: string; userDataDir?: string; address?: string }
 export interface SessionSummary { id: string; name: string; startedAt: number; endedAt: number | null; browser: string; tabCount: number; folderId: string | null; order: number | null }
 export interface Folder { id: string; name: string; createdAt: number; parentId: string | null }

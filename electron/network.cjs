@@ -47,11 +47,12 @@ function requestPeer(peer, route, body) {
 }
 
 class NetworkManager extends EventEmitter {
-  constructor(manager, dataDir, { pollInterval = 2000 } = {}) {
+  constructor(manager, dataDir, { pollInterval = 2000, getBrowsers = () => require('./browser.cjs').detectBrowsers() } = {}) {
     super();
     this.manager = manager;
     this.file = path.join(dataDir, 'network.json');
     this.pollInterval = pollInterval;
+    this.getBrowsers = getBrowsers;
     let saved;
     try { saved = JSON.parse(fs.readFileSync(this.file, 'utf8')); } catch {}
     const defaults = { mode: 'off', name: os.hostname(), port: 45831, token: randomBytes(24).toString('hex'), peers: [] };
@@ -198,10 +199,16 @@ class NetworkManager extends EventEmitter {
     const source = peer?.data?.state.sessions.find((item) => item.session.id === sessionId);
     if (!peer?.connected || source?.status !== 'live') throw new Error('Choose a connected, live remote session.');
     if (source.session.mirror) throw new Error('A mirrored session cannot be used as a mirror source.');
-    const state = await this.manager.launch({ ...options, url: 'about:blank' });
+    const browsers = this.getBrowsers();
+    const available = browsers.map((item) => ({ ...item, path: options.mirrorExecutables?.[item.id] || item.path })).filter((item) => item.path);
+    const browser = available.find((item) => item.id === source.session.browser) || available[0];
+    if (!browser) throw new Error('Install Helium or Chrome on this machine to mirror a remote session.');
+    const state = await this.manager.launch({ ...options, browser: browser.id, executable: browser.path, url: 'about:blank' });
     const controller = this.manager.controllers.get(state.activeSessionId);
     controller.session.mirror = { peerId, sessionId, instanceId: peer.data.instanceId };
     this.updateMirrors(peerId, this.peers.get(peerId)?.connected ? this.peers.get(peerId).data : null);
+    try { await controller.waitForMirror?.(); }
+    catch (error) { await controller.stop(); throw error; }
     return this.manager.snapshot();
   }
 
@@ -215,7 +222,7 @@ class NetworkManager extends EventEmitter {
         controller.lastError = 'Remote mirror paused. Waiting for its source session to reconnect.';
       } else {
         controller.mirrorPlan = require('./remote-mirror.cjs').buildMirrorPlan(source.session);
-        controller.lastError = null;
+        if (controller.lastError?.startsWith('Remote mirror paused.')) controller.lastError = null;
       }
       controller.publish();
     }

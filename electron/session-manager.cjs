@@ -70,8 +70,10 @@ class SessionManager extends EventEmitter {
     this.controllers.set(sessionId, controller);
     this.publish();
     try {
-      const source = this.latestProfileSession();
-      const profileSourceSessionId = options.profileSourceSessionId || source?.id || null;
+      // A mirror must not inherit older companion installations or their bridge
+      // addresses from another session's browser profile.
+      const source = options.mirror ? null : this.latestProfileSession();
+      const profileSourceSessionId = options.mirror ? null : options.profileSourceSessionId || source?.id || null;
       const sourceController = this.controllers.get(profileSourceSessionId);
       const liveCookies = sourceController?.client?.send('Storage.getCookies').then((result) => result.cookies || []).catch(() => []) || Promise.resolve([]);
       await controller.launch({ ...options, sessionId, profileSourceSessionId, profileSourceBrowser: source?.browser });

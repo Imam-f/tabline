@@ -452,19 +452,26 @@ class BrowserController extends EventEmitter {
       const extensionOrigin = this.bridgeOrigin();
       for (const file of ['background.js', 'popup.js']) {
         const full = path.join(runtimeExtensionPath, file);
-        fs.writeFileSync(full, fs.readFileSync(full, 'utf8').replaceAll('http://127.0.0.1:17637', extensionOrigin));
+        let code = fs.readFileSync(full, 'utf8').replaceAll('http://127.0.0.1:17637', extensionOrigin);
+        // A cloned profile may remember the previous session's bridge. A mirror
+        // has an embedded address and must never switch back to that stale one.
+        if (options.mirror && file === 'background.js') code = code.replace('await refreshBridge();', '');
+        fs.writeFileSync(full, code);
       }
       // Port 0 (and --enable-automation) puts Chrome in automation mode, which
       // displays an infobar and can prevent Google account sign-in.
       const debugPort = await availableDebugPort();
+      const loadOverPipe = browser === 'chrome' && !!options.mirror;
+      this.mirrorCompanionManaged = !!options.mirror;
       const child = spawn(executable, [
         `--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1',
         `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check',
         '--disable-background-mode', '--new-window',
         '--enable-extensions', `--load-extension=${runtimeExtensionPath}`,
+        ...(loadOverPipe ? ['--remote-debugging-pipe', '--enable-unsafe-extension-debugging'] : []),
         ...(process.env.TABLINE_BROWSER_LOG ? ['--enable-logging=stderr', '--vmodule=extensions*=2'] : []),
         url,
-      ], { stdio: process.env.TABLINE_BROWSER_LOG ? 'inherit' : 'ignore', windowsHide: false });
+      ], { stdio: loadOverPipe ? ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] : process.env.TABLINE_BROWSER_LOG ? 'inherit' : 'ignore', windowsHide: false });
       this.process = child;
       child.once('error', (error) => { launchError = error; });
       child.once('exit', () => { exited = true; if (this.process === child && (this.status === 'live' || this.status === 'stopping')) this.finish(); });
@@ -495,6 +502,15 @@ class BrowserController extends EventEmitter {
       this.snapshotSequences.clear();
       this.session = { id: sessionId, name: options.name?.trim().slice(0, 80) || 'Untitled session', browser, startedAt: Date.now(), endedAt: null, browserDataDir: sessionId, profileSourceSessionId: options.profileSourceSessionId || null, profileCopySkipped, activityHistory: [], tabs: [] };
       await this.startTracking();
+      if (loadOverPipe) {
+        const { id } = await require('./extension-loader.cjs').loadCompanion(child, runtimeExtensionPath);
+        const page = this.session.tabs.find((tab) => !tab.closedAt);
+        const { sessionId: workerSession } = await this.client.send('Target.attachToTarget', { targetId: page.id, flatten: true });
+        try {
+          await this.client.send('ServiceWorker.enable', {}, workerSession);
+          await this.client.send('ServiceWorker.startWorker', { scopeURL: `chrome-extension://${id}/` }, workerSession);
+        } finally { await this.client.send('Target.detachFromTarget', { sessionId: workerSession }).catch(() => {}); }
+      }
       return this.snapshot();
     } catch (error) {
       this.client?.close();
@@ -567,7 +583,9 @@ class BrowserController extends EventEmitter {
   onTarget(info, { created = false } = {}) {
     if (!this.session) return;
     if (info.type === 'service_worker' && /^chrome-extension:\/\/[^/]+\/background\.js$/.test(info.url || '')) {
-      this.configureCompanion(info.targetId).catch(() => {});
+      // Attaching and detaching while a newly installed MV3 worker starts can
+      // stop it before its startup code runs. Managed mirrors embed the address.
+      if (!this.mirrorCompanionManaged) this.configureCompanion(info.targetId).catch(() => {});
       return;
     }
     if (info.type === 'page' && info.url?.startsWith('chrome-extension://')) {
@@ -1040,8 +1058,18 @@ class BrowserController extends EventEmitter {
     } finally { this.inactivityBusy = false; }
   }
 
+  async waitForMirror(timeout = 15000) {
+    const started = Date.now();
+    while (this.status === 'live' && Date.now() - started < timeout) {
+      if (this.lastMirrorAppliedAt) return;
+      await delay(100);
+    }
+    throw new Error(this.lastError || 'Remote mirror could not connect to the browser companion. Restart Tabline and try again.');
+  }
+
   async applyMirrorDesktops(message) {
     if (!this.mirrorPlan || this.status !== 'live') return;
+    this.lastError = message.error ? `Remote mirror: ${message.error}` : null;
     for (const mapping of message.windows || []) {
       const source = this.mirrorPlan.windows.find((item) => item.sourceWindowId === mapping.sourceWindowId);
       const tab = this.session.tabs.find((item) => !item.closedAt && item.extensionWindowId === mapping.extensionWindowId);
@@ -1051,7 +1079,7 @@ class BrowserController extends EventEmitter {
       const moved = await this.desktopIndexMover(tab.windowId, tab.windowBounds, this.process?.pid, source.desktopIndex);
       if (!moved) this.lastError = `Remote mirror: local desktop ${source.desktopIndex + 1} is unavailable or Windows could not move the window.`;
     }
-    if (message.error) this.lastError = `Remote mirror: ${message.error}`;
+    if (!message.error) this.lastMirrorAppliedAt = Date.now();
     this.publish();
   }
 

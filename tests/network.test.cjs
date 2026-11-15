@@ -31,7 +31,7 @@ function fixture(t, name) {
     listSessions: () => [{ id, name, tabCount: 1 }],
     restoreSession: async (sessionId, options) => { assert.equal(sessionId, id, 'restore must use data owned by the receiving instance'); calls.push({ sessionId, options }); return { opened: 1, skipped: 0, failed: 0, warnings: [] }; },
   };
-  const network = new NetworkManager(manager, directory, { pollInterval: 30 });
+  const network = new NetworkManager(manager, directory, { pollInterval: 30, getBrowsers: () => [{ id: 'chrome', path: 'test-chrome' }] });
   t.after(() => { network.stop(); fs.rmSync(directory, { force: true, recursive: true }); });
   return { network, directory, manager, id, calls, session };
 }
@@ -49,8 +49,8 @@ test('remote mirrors launch locally, pause on disconnect, and resume only their 
   await until(() => local.network.peers.get('remote')?.connected);
   const controller = { status: 'live', session: { id: 'local' }, publish() {} };
   local.manager.controllers = new Map([['local', controller]]);
-  local.manager.launch = async (options) => { assert.equal(options.url, 'about:blank'); return { activeSessionId: 'local' }; };
-  await local.network.launchMirror({ browser: 'chrome', mirror: { peerId: 'remote', sessionId: remote.id } });
+  local.manager.launch = async (options) => { assert.equal(options.url, 'about:blank'); assert.equal(options.browser, 'chrome'); assert.equal(options.executable, 'test-chrome'); return { activeSessionId: 'local' }; };
+  await local.network.launchMirror({ browser: 'helium', mirror: { peerId: 'remote', sessionId: remote.id } });
   assert.equal(controller.session.mirror.instanceId, remote.network.instanceId);
   assert.equal(controller.mirrorPlan.sourceSessionId, remote.id);
   remote.network.stop();

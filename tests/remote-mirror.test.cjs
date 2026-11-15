@@ -4,6 +4,46 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { buildMirrorPlan } = require('../electron/remote-mirror.cjs');
 const { BrowserController } = require('../electron/browser.cjs');
+const { PassThrough } = require('node:stream');
+const { loadCompanion } = require('../electron/extension-loader.cjs');
+
+test('extension loading uses the pipe and handles fragmented protocol responses', async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let command = '';
+  input.on('data', (chunk) => { command += chunk; });
+  const result = loadCompanion({ stdio: [null, null, null, input, output] }, 'test-extension');
+  assert.equal(JSON.parse(command.slice(0, -1)).method, 'Extensions.loadUnpacked');
+  output.write('{"id":1,"result":');
+  output.write('{"id":"companion"}}\0');
+  assert.deepEqual(await result, { id: 'companion' });
+  assert.equal(output.listenerCount('data'), 0);
+});
+
+test('extension loading reports browser rejection and missing responses', async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const rejected = loadCompanion({ stdio: [null, null, null, input, output] }, 'test-extension');
+  output.write('{"id":1,"error":{"message":"Extension blocked"}}\0');
+  await assert.rejects(rejected, /Extension blocked/);
+  await assert.rejects(loadCompanion({ stdio: [null, null, null, input, output] }, 'test-extension', 5), /did not load/);
+});
+
+test('managed mirror workers are not interrupted by startup debugger attachment', () => {
+  const controller = Object.create(BrowserController.prototype);
+  controller.session = { tabs: [] };
+  controller.mirrorCompanionManaged = true;
+  controller.configureCompanion = () => { throw new Error('must not attach during mirror worker startup'); };
+  controller.onTarget({ type: 'service_worker', targetId: 'worker', url: 'chrome-extension://companion/background.js' });
+});
+
+test('mirror launch waits for acknowledgement and reports failure instead of succeeding blank', async () => {
+  const controller = Object.create(BrowserController.prototype);
+  controller.status = 'live';
+  await assert.rejects(controller.waitForMirror(1), /could not connect/);
+  controller.lastMirrorAppliedAt = Date.now();
+  await controller.waitForMirror();
+});
 
 test('mirror plans retain windows, active tabs and desktop positions without copying machine IDs', () => {
   const plan = buildMirrorPlan({ id: 'remote', tabs: [
