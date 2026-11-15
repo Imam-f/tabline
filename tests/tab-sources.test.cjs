@@ -20,6 +20,38 @@ function controller(t) {
 const page = (targetId, openerId) => ({ type: 'page', targetId, url: 'https://same.example', title: 'Same', openerId });
 const event = { sourceTabId: 10, tabId: 20, timeStamp: 123 };
 
+test('focus from responsive tabs is recorded before later suspended-tab batches finish', async (t) => {
+  const c = controller(t);
+  for (let i = 0; i < 17; i++) {
+    const tab = upsertTarget(c.session, page(`tab-${i}`));
+    tab.windowId = '1';
+  }
+  c.status = 'live';
+  let release;
+  const suspended = new Promise((resolve) => { release = resolve; });
+  let secondBatch;
+  const reachedSecondBatch = new Promise((resolve) => { secondBatch = resolve; });
+  c.client = { send: async (method, params, sessionId, options) => {
+    assert.equal(options.timeout, 300, 'focus commands must use a short timeout');
+    if (method === 'Target.attachToTarget') return { sessionId: params.targetId };
+    if (method === 'Runtime.evaluate') {
+      if (sessionId === 'tab-16') { secondBatch(); await suspended; throw new Error('Sleeping renderer'); }
+      return { result: { value: { visible: sessionId === 'tab-0', focused: sessionId === 'tab-0' } } };
+    }
+    return {};
+  } };
+  const sampling = c.refreshActivityFromCdp();
+  await reachedSecondBatch;
+  assert.equal(c.session.tabs[0].focused, true);
+  assert.ok(c.lastActivityObservedAt);
+  c.onTarget(page('child'), { created: true });
+  assert.equal(c.session.tabs.at(-1).openerId, 'tab-0');
+  assert.equal(c.session.tabs.at(-1).openerSource, 'focused-tab');
+  release();
+  await sampling;
+  assert.equal(c.activityBusy, false);
+});
+
 test('new tabs infer the previously focused active tab and explicit sources replace inference', (t) => {
   const c = controller(t);
   c.onTarget(page('parent'));
@@ -40,6 +72,32 @@ test('new tabs infer the previously focused active tab and explicit sources repl
   c.onTarget(page('child', 'other'));
   assert.equal(child.openerId, 'parent');
   assert.equal(child.openerSource, 'navigation');
+});
+
+test('partial focus samples preserve a focused tab until that tab responds', async (t) => {
+  const c = controller(t);
+  for (let i = 0; i < 17; i++) upsertTarget(c.session, { ...page(`tab-${i}`), windowId: '1' });
+  c.recordActivity([{ windowId: '1', tabId: 'tab-16' }], '1');
+  c.status = 'live';
+  let release;
+  const blocked = new Promise((resolve) => { release = resolve; });
+  let reached;
+  const waiting = new Promise((resolve) => { reached = resolve; });
+  c.client = { send: async (method, params, sessionId) => {
+    if (method === 'Target.attachToTarget') return { sessionId: params.targetId };
+    if (method === 'Runtime.evaluate') {
+      if (sessionId === 'tab-16') { reached(); await blocked; }
+      return { result: { value: { visible: false, focused: false } } };
+    }
+    return {};
+  } };
+  const sampling = c.refreshActivityFromCdp();
+  await waiting;
+  assert.equal(c.session.tabs[16].focused, true, 'unsampled focused tab must survive early batches');
+  assert.equal(c.session.tabs[16].active, true);
+  release();
+  await sampling;
+  assert.equal(c.session.tabs[16].focused, false, 'an actual blur response clears focus');
 });
 
 test('discovery, updates, stale focus, closed parents, and unfocused windows do not infer parents', (t) => {

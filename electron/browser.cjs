@@ -812,26 +812,32 @@ class BrowserController extends EventEmitter {
     try {
       const observations = [];
       const tabs = this.session.tabs.filter((tab) => !tab.closedAt && tab.windowId);
-      for (let index = 0; index < tabs.length; index += 8) {
-        const batch = await Promise.all(tabs.slice(index, index + 8).map(async (tab) => {
+      // Sleeping renderers may never answer Runtime.evaluate. Keep focus probes
+      // short and publish each batch instead of waiting for the entire browser.
+      const probeOptions = { timeout: 300 };
+      for (let index = 0; index < tabs.length; index += 16) {
+        const batch = await Promise.all(tabs.slice(index, index + 16).map(async (tab) => {
           let sessionId;
           try {
-            ({ sessionId } = await client.send('Target.attachToTarget', { targetId: tab.id, flatten: true }));
-            const result = await client.send('Runtime.evaluate', { expression: '({ visible: document.visibilityState === "visible", focused: document.hasFocus() })', returnByValue: true }, sessionId);
+            ({ sessionId } = await client.send('Target.attachToTarget', { targetId: tab.id, flatten: true }, undefined, probeOptions));
+            const result = await client.send('Runtime.evaluate', { expression: '({ visible: document.visibilityState === "visible", focused: document.hasFocus() })', returnByValue: true }, sessionId, probeOptions);
             const value = result.result?.value;
             return value && typeof value.visible === 'boolean' && typeof value.focused === 'boolean' ? { tab, ...value } : null;
           } catch { return null; }
-          finally { if (sessionId) await client.send('Target.detachFromTarget', { sessionId }).catch(() => {}); }
+          finally { if (sessionId) await client.send('Target.detachFromTarget', { sessionId }, undefined, probeOptions).catch(() => {}); }
         }));
         observations.push(...batch.filter(Boolean));
+        if (!observations.length || this.status !== 'live' || this.client !== client || Date.now() - this.lastCompanionSnapshotAt < 4000) continue;
+        const observedIds = new Set(observations.map((item) => item.tab.id));
+        const previousFocused = tabs.find((tab) => tab.focused && !observedIds.has(tab.id));
+        const windows = [...new Set(tabs.map((tab) => tab.windowId))].map((windowId) => ({
+          windowId,
+          tabId: (observations.find((item) => item.tab.windowId === windowId && item.focused) || observations.find((item) => item.tab.windowId === windowId && item.visible))?.tab.id
+            || tabs.find((tab) => tab.windowId === windowId && tab.active && !observedIds.has(tab.id))?.id || null,
+        }));
+        const focusedWindowId = observations.find((item) => item.focused)?.tab.windowId || previousFocused?.windowId || null;
+        this.recordActivity(windows, focusedWindowId);
       }
-      if (!observations.length || this.status !== 'live' || this.client !== client || Date.now() - this.lastCompanionSnapshotAt < 4000) return;
-      const windows = [...new Set(tabs.map((tab) => tab.windowId))].map((windowId) => ({
-        windowId,
-        tabId: (observations.find((item) => item.tab.windowId === windowId && item.focused) || observations.find((item) => item.tab.windowId === windowId && item.visible))?.tab.id || null,
-      }));
-      const focusedWindowId = observations.find((item) => item.focused)?.tab.windowId || null;
-      this.recordActivity(windows, focusedWindowId);
     } finally { this.activityBusy = false; }
   }
 

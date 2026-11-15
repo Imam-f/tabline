@@ -45,14 +45,14 @@ class CDP extends EventEmitter {
     });
   }
 
-  send(method, params = {}, sessionId) {
+  send(method, params = {}, sessionId, { timeout = 10000 } = {}) {
     if (this.socket?.readyState !== WebSocket.OPEN) return Promise.reject(new Error('Browser is not connected'));
     return new Promise((resolve, reject) => {
       const id = ++this.nextId;
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`${method} timed out`));
-      }, 10000);
+      }, timeout);
       this.pending.set(id, { resolve, reject, timer });
       this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
